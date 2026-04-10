@@ -1,0 +1,24 @@
+name: goods-price-comparison-deployer
+description: Tekton deployer for goods-price-comparison-service — service-specific CI/CD pipeline, tasks, and RBAC for shared dev-infrastructure
+version: 1.0.0
+
+technologies:
+  - Tekton Pipelines
+  - Kubernetes
+  - k3d
+  - Docker
+  - Kaniko
+  - Maven
+  - Shell scripting
+
+workflows:
+  - k8s-expert
+  - docker-expert
+  - kind-expert
+
+capabilities:
+  - Tekton pipeline and task definitions
+  - Kubernetes RBAC and namespace management
+  - Container image builds with Kaniko
+  - Maven build and test automation
+  - CI/CD integration with shared infrastructure

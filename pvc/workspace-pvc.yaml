@@ -1,0 +1,12 @@
+# PVC for Tekton workspace persistence
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: ${DEPLOYMENT_NAME}-pvc
+  namespace: ${PIPELINE_NAMESPACE}
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 2Gi

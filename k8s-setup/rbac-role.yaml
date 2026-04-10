@@ -1,0 +1,30 @@
+# Role: Scoped permissions for goods-price-service in tekton-pipelines namespace
+# - Can manage CI/CD resources (tasks, pipelines, PVCs, deployments) in this namespace
+# - Cannot touch shared infrastructure (SA, ClusterRole, ClusterRoleBinding)
+# - Cannot touch shared secrets (registry-credentials, gcr-key)
+# - Service-to-service isolation: each service owns its resources by naming convention
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: ${DEPLOYMENT_NAME}-role
+  namespace: ${PIPELINE_NAMESPACE}
+rules:
+  - apiGroups: ["tekton.dev"]
+    resources: ["tasks", "taskruns", "pipelines", "pipelineruns"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  - apiGroups: [""]
+    resources: ["persistentvolumeclaims", "pods", "pods/log"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  - apiGroups: [""]
+    resources: ["secrets"]
+    resourceNames: ["github-maven-credentials", "maven-settings-secret"]
+    verbs: ["get", "list", "watch", "update", "patch", "delete"]
+  - apiGroups: [""]
+    resources: ["secrets"]
+    verbs: ["create"]
+  - apiGroups: ["apps"]
+    resources: ["deployments", "replicasets"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  - apiGroups: [""]
+    resources: ["configmaps"]
+    verbs: ["get", "list", "watch"]

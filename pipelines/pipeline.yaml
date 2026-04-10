@@ -1,0 +1,110 @@
+# Pipeline: Clone → Build → Test → Build Image → Deploy
+apiVersion: tekton.dev/v1
+kind: Pipeline
+metadata:
+  name: goods-price-pipeline
+  namespace: ${PIPELINE_NAMESPACE}
+spec:
+  workspaces:
+    - name: shared-workspace
+  params:
+    - name: git-url
+      type: string
+      default: "${GIT_REPO_URL}"
+    - name: git-revision
+      type: string
+      default: "${GIT_REPO_DEFAULT_BRANCH}"
+    - name: image-name
+      type: string
+      default: "${IMAGE_NAME}"
+    - name: image-tag
+      type: string
+      default: "${IMAGE_TAG}"
+    - name: registry-host
+      type: string
+      default: "${REGISTRY_CLUSTER_HOST}"
+    - name: registry-port
+      type: string
+      default: "${REGISTRY_CLUSTER_PORT}"
+    - name: test-goals
+      type: string
+      default: "test"
+      description: "Maven test goals: 'test' or 'verify'"
+    - name: deployment-namespace
+      type: string
+      default: "${DEPLOYMENT_NAMESPACE}"
+    - name: deployment-name
+      type: string
+      default: "${DEPLOYMENT_NAME}"
+
+  tasks:
+    # 0. Cleanup workspace
+    - name: cleanup
+      taskRef:
+        name: cleanup
+      workspaces:
+        - name: output
+          workspace: shared-workspace
+
+    # 1. Clone source code
+    - name: clone
+      taskRef:
+        name: git-clone
+      runAfter: [cleanup]
+      workspaces:
+        - name: output
+          workspace: shared-workspace
+      params:
+        - name: url
+          value: $(params.git-url)
+        - name: revision
+          value: $(params.git-revision)
+
+    # 2. Maven build (skip tests)
+    - name: build
+      taskRef:
+        name: maven-build
+      runAfter: [clone]
+      workspaces:
+        - name: output
+          workspace: shared-workspace
+
+    # 2. Maven test
+    - name: test
+      taskRef:
+        name: maven-test
+      runAfter: [build]
+      workspaces:
+        - name: output
+          workspace: shared-workspace
+      params:
+        - name: GOALS
+          value: $(params.test-goals)
+
+    # 3. Build and push Docker image
+    - name: build-image
+      taskRef:
+        name: docker-build
+      runAfter: [test]
+      workspaces:
+        - name: output
+          workspace: shared-workspace
+      params:
+        - name: IMAGE
+          value: "$(params.registry-host):$(params.registry-port)/$(params.image-name):$(params.image-tag)"
+
+    # 4. Deploy to Kubernetes
+    - name: deploy
+      taskRef:
+        name: deploy
+      runAfter: [build-image]
+      workspaces:
+        - name: source
+          workspace: shared-workspace
+      params:
+        - name: IMAGE
+          value: "$(params.registry-host):$(params.registry-port)/$(params.image-name):$(params.image-tag)"
+        - name: NAMESPACE
+          value: $(params.deployment-namespace)
+        - name: DEPLOYMENT_NAME
+          value: $(params.deployment-name)

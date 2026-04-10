@@ -1,0 +1,53 @@
+# Task: Maven Build (compile + package, skip tests)
+apiVersion: tekton.dev/v1
+kind: Task
+metadata:
+  name: maven-build
+  namespace: ${PIPELINE_NAMESPACE}
+spec:
+  workspaces:
+    - name: output
+    - name: maven-settings
+      optional: true
+  volumes:
+    - name: maven-settings
+      secret:
+        secretName: maven-settings-secret
+    - name: maven-repo
+      persistentVolumeClaim:
+        claimName: maven-cache-pvc
+  params:
+    - name: MAVEN_OPTS
+      type: string
+      default: "-Xmx400m"
+  steps:
+    - name: build
+      image: ${MAVEN_IMAGE}
+      workingDir: $(workspaces.output.path)
+      volumeMounts:
+        - name: maven-settings
+          mountPath: /root/.m2/settings.xml
+          subPath: settings.xml
+        - name: maven-repo
+          mountPath: /root/.m2/repository
+      env:
+        - name: MAVEN_OPTS
+          value: $(params.MAVEN_OPTS)
+        - name: GITHUB_USERNAME
+          valueFrom:
+            secretKeyRef:
+              name: github-maven-credentials
+              key: username
+              optional: true
+        - name: GITHUB_TOKEN
+          valueFrom:
+            secretKeyRef:
+              name: github-maven-credentials
+              key: token
+              optional: true
+      command:
+        - mvn
+        - clean
+        - package
+        - -DskipTests
+        - --batch-mode

@@ -1,0 +1,37 @@
+# Task: Cleanup workspace permissions
+apiVersion: tekton.dev/v1
+kind: Task
+metadata:
+  name: cleanup
+  namespace: ${PIPELINE_NAMESPACE}
+spec:
+  workspaces:
+    - name: output
+      optional: true
+  steps:
+    - name: cleanup
+      image: ${KUBECTL_IMAGE}
+      workingDir: $(workspaces.output.path)
+      script: |
+        #!/bin/bash
+        set +e  # Don't fail on permission errors
+        
+        WORKSPACE_PATH="$(workspaces.output.path)"
+        
+        if [ -d "$WORKSPACE_PATH" ]; then
+          echo "Cleaning up workspace: $WORKSPACE_PATH"
+          
+          # Fix permissions for files created by previous builds
+          chmod -R u+w "$WORKSPACE_PATH" 2>/dev/null || true
+          chmod -R g+w "$WORKSPACE_PATH" 2>/dev/null || true
+          
+          # Remove target directory with force (will skip permission errors)
+          rm -rf "$WORKSPACE_PATH/target" 2>/dev/null || true
+          
+          # Remove other build artifacts
+          find "$WORKSPACE_PATH" -type d -name ".git" -exec rm -rf {} + 2>/dev/null || true
+          
+          echo "Workspace cleanup completed"
+        else
+          echo "Workspace path does not exist, skipping cleanup"
+        fi

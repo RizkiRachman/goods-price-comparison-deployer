@@ -1,0 +1,12 @@
+# PVC for Maven repository cache to speed up builds
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: maven-cache-pvc
+  namespace: ${PIPELINE_NAMESPACE}
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 5Gi

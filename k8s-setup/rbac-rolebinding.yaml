@@ -1,0 +1,16 @@
+# RoleBinding: Binds the goods-price-service identity to its scoped Role
+# RBAC_USER is set to the component service name (e.g., goods-price-service)
+# This ensures the service can only manage its own resources, not shared infrastructure
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: ${DEPLOYMENT_NAME}-binding
+  namespace: ${PIPELINE_NAMESPACE}
+subjects:
+- kind: User
+  name: ${RBAC_USER}
+  apiGroup: rbac.authorization.k8s.io
+roleRef:
+  kind: Role
+  name: ${DEPLOYMENT_NAME}-role
+  apiGroup: rbac.authorization.k8s.io

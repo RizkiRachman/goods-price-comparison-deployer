@@ -11,6 +11,9 @@ spec:
     - name: IMAGE
       type: string
       description: "Full image reference to deploy"
+    - name: IMAGE_NAME
+      type: string
+      description: "Container image name (derived from image URI)"
     - name: NAMESPACE
       type: string
       default: "${DEPLOYMENT_NAMESPACE}"
@@ -29,6 +32,8 @@ spec:
       env:
         - name: IMAGE
           value: $(params.IMAGE)
+        - name: IMAGE_NAME
+          value: $(params.IMAGE_NAME)
         - name: NAMESPACE
           value: $(params.NAMESPACE)
         - name: DEPLOYMENT_NAME
@@ -55,14 +60,17 @@ spec:
             --port=$(params.DEPLOYMENT_PORT)
           
           # Set image pull policy and pull secrets
-          kubectl patch deployment "${DEPLOYMENT_NAME}" -n "${NAMESPACE}" -p '{"spec":{"template":{"spec":{"imagePullPolicy":"Always","imagePullSecrets":[{"name":"registry-credentials"}]}}}}' 2>/dev/null || true
+          kubectl patch deployment "${DEPLOYMENT_NAME}" -n "${NAMESPACE}" -p '{"spec":{"template":{"spec":{"containers":[{"name":"'"${DEPLOYMENT_NAME}"'","imagePullPolicy":"Always"}],"imagePullSecrets":[{"name":"registry-credentials"}]}}}}' 2>/dev/null || true
         else
           echo "📄 Updating existing deployment..."
-          kubectl set image deployment/"${DEPLOYMENT_NAME}" \
+          echo "  Container name: ${DEPLOYMENT_NAME}"
+
+          kubectl patch deployment "${DEPLOYMENT_NAME}" \
             -n "${NAMESPACE}" \
-            "${DEPLOYMENT_NAME}"="${IMAGE}" || true
-          
-          kubectl patch deployment "${DEPLOYMENT_NAME}" -n "${NAMESPACE}" -p '{"spec":{"template":{"spec":{"imagePullSecrets":[{"name":"registry-credentials"}]}}}}' 2>/dev/null || true
+            -p "{\"spec\":{\"template\":{\"spec\":{\"containers\":[{\"name\":\"${DEPLOYMENT_NAME}\",\"image\":\"${IMAGE}\",\"imagePullPolicy\":\"Always\"}],\"imagePullSecrets\":[{\"name\":\"registry-credentials\"}]}}}}" || true
+
+          # Force restart to ensure new pods are created (important for :latest tags)
+          kubectl rollout restart deployment/"${DEPLOYMENT_NAME}" -n "${NAMESPACE}"
         fi
         
         echo "⏳ Waiting for rollout to complete (timeout: $(params.ROLLOUT_TIMEOUT))..."

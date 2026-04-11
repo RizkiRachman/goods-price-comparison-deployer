@@ -1,10 +1,13 @@
 # PipelineRun: Execute the goods-price-service pipeline
+# pipeline-mode: "full" (all tasks) or "plan" (build+test only)
 apiVersion: tekton.dev/v1
 kind: PipelineRun
 metadata:
   generateName: ${DEPLOYMENT_NAME}-
   namespace: ${PIPELINE_NAMESPACE}
 spec:
+  taskRunTemplate:
+    serviceAccountName: tekton-sa
   pipelineRef:
     name: goods-price-pipeline
   workspaces:
@@ -30,3 +33,5 @@ spec:
       value: "${DEPLOYMENT_NAMESPACE}"
     - name: deployment-name
       value: "${DEPLOYMENT_NAME}"
+    - name: pipeline-mode
+      value: "${PIPELINE_MODE}"

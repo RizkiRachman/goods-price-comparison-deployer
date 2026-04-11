@@ -1,0 +1,35 @@
+# Task: Docker Build and Push using Kaniko
+apiVersion: tekton.dev/v1
+kind: Task
+metadata:
+  name: docker-build
+  namespace: ${PIPELINE_NAMESPACE}
+spec:
+  workspaces:
+    - name: output
+  params:
+    - name: IMAGE
+      type: string
+      description: "Full image name including registry (e.g., registry.example.com/myimage:tag)"
+    - name: DOCKERFILE
+      type: string
+      default: "./Dockerfile"
+    - name: CONTEXT
+      type: string
+      default: "."
+  steps:
+    - name: build-and-push
+      image: ${KANIKO_IMAGE}
+      workingDir: $(workspaces.output.path)
+      env:
+        - name: DOCKER_CONFIG
+          value: /tekton/home/.docker
+      command:
+        - /kaniko/executor
+      args:
+        - --dockerfile=$(params.DOCKERFILE)
+        - --context=$(params.CONTEXT)
+        - --destination=$(params.IMAGE)
+        - --skip-tls-verify
+        - --insecure
+        - --cache=true

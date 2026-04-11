@@ -1,0 +1,18 @@
+# Env files with secrets
+.env
+.env.local
+.env.*.local
+
+# IDE
+.idea/
+.windsurf/
+
+# Memory context
+.memory/
+
+# Terraform state (contains secrets)
+terraform/.terraform/
+terraform/*.tfstate
+terraform/*.tfstate.*
+terraform/*.lock.hcl
+terraform/terraform.tfvars

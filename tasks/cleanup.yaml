@@ -1,0 +1,32 @@
+# Task: Cleanup workspace permissions
+apiVersion: tekton.dev/v1
+kind: Task
+metadata:
+  name: cleanup
+  namespace: ${PIPELINE_NAMESPACE}
+spec:
+  workspaces:
+    - name: output
+      optional: true
+  steps:
+    - name: cleanup
+      image: ${KUBECTL_IMAGE}
+      workingDir: $(workspaces.output.path)
+      securityContext:
+        runAsUser: 0
+      script: |
+        #!/bin/bash
+        set +e
+
+        WORKSPACE_PATH="$(workspaces.output.path)"
+
+        if [ -d "$WORKSPACE_PATH" ]; then
+          echo "Cleaning up workspace: $WORKSPACE_PATH"
+
+          # Remove all contents (runs as root so no permission issues)
+          find "$WORKSPACE_PATH" -mindepth 1 -maxdepth 1 ! -name "lost+found" -exec rm -rf {} +
+
+          echo "Workspace cleanup completed"
+        else
+          echo "Workspace path does not exist, skipping cleanup"
+        fi

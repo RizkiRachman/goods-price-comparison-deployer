@@ -1,8 +1,9 @@
 #!/bin/bash
-# Apply: Execute full Tekton pipeline (clone → build → test → image → deploy)
+# Plan: Execute partial Tekton pipeline (clone → build → test only)
+# No image build, no deploy. Verifies code compiles and tests pass.
 # Assumes infrastructure is already initialized (run ./scripts/init.sh first)
 #
-# Usage: ./scripts/apply.sh
+# Usage: ./scripts/plan.sh
 
 set -e
 
@@ -19,23 +20,23 @@ check_tekton_pipeline
 
 echo ""
 echo "=========================================="
-echo "  APPLY — Full Pipeline Execution"
+echo "  PLAN — Partial Pipeline (Build + Test)"
 echo "=========================================="
 echo ""
 echo "  Service: ${DEPLOYMENT_NAME}"
-echo "  Image:   ${IMAGE_NAME}:${IMAGE_TAG}"
-echo "  Mode:    full (all tasks including deploy)"
+echo "  Mode:    plan (build + test only, no deploy)"
 echo ""
 
 timer_start
 
-stage_pipeline_run "full"
+stage_pipeline_run "plan"
 
 echo ""
 echo "=========================================="
-echo "  ✅ APPLY COMPLETE — $(timer_elapsed)"
+echo "  ✅ PLAN COMPLETE — $(timer_elapsed)"
 echo "=========================================="
 echo ""
-echo "  Service: ${DEPLOYMENT_NAMESPACE}/${DEPLOYMENT_NAME}"
-echo "  Image:   ${REGISTRY_CLUSTER_HOST}:${REGISTRY_CLUSTER_PORT}/${IMAGE_NAME}:${IMAGE_TAG}"
+echo "  Build and test passed. No deployment was made."
 echo ""
+echo "  To deploy:"
+echo "    ./scripts/apply.sh"

@@ -2,3 +2,16 @@
 .env
 .env.local
 .env.*.local
+
+# Windsurf IDE
+.windsurf/
+
+# Memory context
+.memory/
+
+# Terraform state (contains secrets)
+terraform/.terraform/
+terraform/*.tfstate
+terraform/*.tfstate.*
+terraform/*.lock.hcl
+terraform/terraform.tfvars

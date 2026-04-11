@@ -1,0 +1,11 @@
+# Terraform variables — copy to terraform.tfvars and fill in values
+
+vault_address       = "http://localhost:8200"
+vault_token         = ""  # Vault root token
+vault_mount         = "local/infrastructure"
+github_secret_name  = "github"
+
+kubeconfig_path = "~/.kube/config"
+kube_context    = "k3d-dev-infra"
+
+pipeline_namespace = "tekton-pipelines"

@@ -1,0 +1,96 @@
+# Task: Database Migration using Flyway
+apiVersion: tekton.dev/v1
+kind: Task
+metadata:
+  name: db-migrate
+  namespace: ${PIPELINE_NAMESPACE}
+spec:
+  workspaces:
+    - name: source
+  params:
+    - name: DB_URL
+      type: string
+      description: "JDBC URL for the database"
+    - name: DB_USERNAME
+      type: string
+      description: "Database username"
+    - name: DB_PASSWORD_SECRET
+      type: string
+      description: "Secret name containing database password"
+      default: "db-credentials"
+    - name: DB_PASSWORD_KEY
+      type: string
+      description: "Key in secret for database password"
+      default: "password"
+    - name: FLYWAY_IMAGE
+      type: string
+      default: "flyway/flyway:10"
+    - name: MIGRATIONS_PATH
+      type: string
+      default: "src/main/resources/db/migration"
+      description: "Path to Flyway migration files"
+  steps:
+    - name: migrate
+      image: $(params.FLYWAY_IMAGE)
+      workingDir: $(workspaces.source.path)
+      env:
+        - name: FLYWAY_URL
+          value: $(params.DB_URL)
+        - name: FLYWAY_USER
+          value: $(params.DB_USERNAME)
+        - name: FLYWAY_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: $(params.DB_PASSWORD_SECRET)
+              key: $(params.DB_PASSWORD_KEY)
+      script: |
+        #!/bin/bash
+        set -e
+
+        echo "🗄️ Running database migrations..."
+        echo "   URL: ${FLYWAY_URL}"
+        echo "   User: ${FLYWAY_USER}"
+        echo "   Migrations: $(params.MIGRATIONS_PATH)"
+
+        # Check if migrations directory exists
+        if [ ! -d "$(params.MIGRATIONS_PATH)" ]; then
+          echo "⚠️ No migrations directory found at $(params.MIGRATIONS_PATH)"
+          echo "   Skipping database migration."
+          exit 0
+        fi
+
+        # Run Flyway migrate
+        flyway \
+          -url="${FLYWAY_URL}" \
+          -user="${FLYWAY_USER}" \
+          -password="${FLYWAY_PASSWORD}" \
+          -locations="filesystem:$(params.MIGRATIONS_PATH)" \
+          migrate
+
+        echo "✅ Database migration completed successfully!"
+
+    - name: verify
+      image: $(params.FLYWAY_IMAGE)
+      workingDir: $(workspaces.source.path)
+      env:
+        - name: FLYWAY_URL
+          value: $(params.DB_URL)
+        - name: FLYWAY_USER
+          value: $(params.DB_USERNAME)
+        - name: FLYWAY_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: $(params.DB_PASSWORD_SECRET)
+              key: $(params.DB_PASSWORD_KEY)
+      script: |
+        #!/bin/bash
+        set -e
+
+        echo "🔍 Verifying migration status..."
+
+        flyway \
+          -url="${FLYWAY_URL}" \
+          -user="${FLYWAY_USER}" \
+          -password="${FLYWAY_PASSWORD}" \
+          -locations="filesystem:$(params.MIGRATIONS_PATH)" \
+          info

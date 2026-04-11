@@ -24,6 +24,12 @@ variable "github_secret_name" {
   default     = "github"
 }
 
+variable "database_secret_name" {
+  description = "Vault secret name for database credentials"
+  type        = string
+  default     = "database"
+}
+
 # ── Kubernetes Configuration ──────────────────────────────
 
 variable "kubeconfig_path" {

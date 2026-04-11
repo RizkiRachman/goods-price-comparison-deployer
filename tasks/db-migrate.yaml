@@ -8,16 +8,19 @@ spec:
   workspaces:
     - name: source
   params:
-    - name: DB_URL
+    # These now come from K8s secret created by Terraform
+    - name: DB_SECRET_NAME
       type: string
-      description: "JDBC URL for the database"
-    - name: DB_USERNAME
-      type: string
-      description: "Database username"
-    - name: DB_PASSWORD_SECRET
-      type: string
-      description: "Secret name containing database password"
+      description: "K8s secret containing database credentials"
       default: "db-credentials"
+    - name: DB_URL_KEY
+      type: string
+      description: "Key in secret for JDBC URL"
+      default: "jdbc_url"
+    - name: DB_USERNAME_KEY
+      type: string
+      description: "Key in secret for database username"
+      default: "username"
     - name: DB_PASSWORD_KEY
       type: string
       description: "Key in secret for database password"
@@ -35,13 +38,19 @@ spec:
       workingDir: $(workspaces.source.path)
       env:
         - name: FLYWAY_URL
-          value: $(params.DB_URL)
+          valueFrom:
+            secretKeyRef:
+              name: $(params.DB_SECRET_NAME)
+              key: $(params.DB_URL_KEY)
         - name: FLYWAY_USER
-          value: $(params.DB_USERNAME)
+          valueFrom:
+            secretKeyRef:
+              name: $(params.DB_SECRET_NAME)
+              key: $(params.DB_USERNAME_KEY)
         - name: FLYWAY_PASSWORD
           valueFrom:
             secretKeyRef:
-              name: $(params.DB_PASSWORD_SECRET)
+              name: $(params.DB_SECRET_NAME)
               key: $(params.DB_PASSWORD_KEY)
       script: |
         #!/bin/bash
@@ -74,13 +83,19 @@ spec:
       workingDir: $(workspaces.source.path)
       env:
         - name: FLYWAY_URL
-          value: $(params.DB_URL)
+          valueFrom:
+            secretKeyRef:
+              name: $(params.DB_SECRET_NAME)
+              key: $(params.DB_URL_KEY)
         - name: FLYWAY_USER
-          value: $(params.DB_USERNAME)
+          valueFrom:
+            secretKeyRef:
+              name: $(params.DB_SECRET_NAME)
+              key: $(params.DB_USERNAME_KEY)
         - name: FLYWAY_PASSWORD
           valueFrom:
             secretKeyRef:
-              name: $(params.DB_PASSWORD_SECRET)
+              name: $(params.DB_SECRET_NAME)
               key: $(params.DB_PASSWORD_KEY)
       script: |
         #!/bin/bash

@@ -42,22 +42,10 @@ spec:
       default: "full"
       description: "full = all tasks including deploy, plan = build+test only"
     # Database migration parameters
-    - name: db-url
-      type: string
-      default: "${DB_URL}"
-      description: "JDBC URL for database migrations"
-    - name: db-username
-      type: string
-      default: "${DB_USERNAME}"
-      description: "Database username for migrations"
-    - name: db-password-secret
+    - name: db-secret-name
       type: string
       default: "db-credentials"
-      description: "K8s secret name containing DB password"
-    - name: db-password-key
-      type: string
-      default: "password"
-      description: "Key in secret for DB password"
+      description: "K8s secret with JDBC URL, username, password"
 
   tasks:
     # 0. Cleanup workspace
@@ -132,14 +120,8 @@ spec:
         - name: source
           workspace: shared-workspace
       params:
-        - name: DB_URL
-          value: $(params.db-url)
-        - name: DB_USERNAME
-          value: $(params.db-username)
-        - name: DB_PASSWORD_SECRET
-          value: $(params.db-password-secret)
-        - name: DB_PASSWORD_KEY
-          value: $(params.db-password-key)
+        - name: DB_SECRET_NAME
+          value: $(params.db-secret-name)
 
     # 6. Deploy to Kubernetes (skipped in plan mode)
     - name: deploy

@@ -36,11 +36,5 @@ spec:
     - name: pipeline-mode
       value: "${PIPELINE_MODE}"
     # Database migration parameters
-    - name: db-url
-      value: "${DB_URL}"
-    - name: db-username
-      value: "${DB_USERNAME}"
-    - name: db-password-secret
-      value: "${DB_PASSWORD_SECRET:-db-credentials}"
-    - name: db-password-key
-      value: "${DB_PASSWORD_KEY:-password}"
+    - name: db-secret-name
+      value: "${DB_SECRET_NAME:-db-credentials}"

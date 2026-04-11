@@ -23,17 +23,24 @@ provider "kubernetes" {
 
 # Read service-scoped secrets from Vault
 module "vault_data" {
-  source             = "./modules/vault-data"
-  vault_mount        = var.vault_mount
-  github_secret_name = var.github_secret_name
+  source               = "./modules/vault-data"
+  vault_mount          = var.vault_mount
+  github_secret_name   = var.github_secret_name
+  database_secret_name = var.database_secret_name
 }
 
 # Create K8s secrets for Tekton pipeline tasks
 module "k8s_secrets" {
-  source           = "./modules/k8s-secrets"
-  namespace        = var.pipeline_namespace
-  github_username  = module.vault_data.github_username
-  github_token     = module.vault_data.github_token
+  source       = "./modules/k8s-secrets"
+  namespace    = var.pipeline_namespace
+  github_username = module.vault_data.github_username
+  github_token    = module.vault_data.github_token
+  # Database credentials for db-migrate task
+  db_host     = module.vault_data.db_host
+  db_port     = module.vault_data.db_port
+  db_name     = module.vault_data.db_name
+  db_username = module.vault_data.db_username
+  db_password = module.vault_data.db_password
 }
 
 # Note: registry-credentials is managed by dev-infrastructure, NOT by this service.

@@ -9,3 +9,9 @@ variable "github_secret_name" {
   type        = string
   default     = "github"
 }
+
+variable "database_secret_name" {
+  description = "Vault secret name for database credentials"
+  type        = string
+  default     = "database"
+}

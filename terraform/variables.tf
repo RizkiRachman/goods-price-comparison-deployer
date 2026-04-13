@@ -1,6 +1,6 @@
 # ── Vault Configuration ────────────────────────────────────
 
-variable "vault_address" {
+variable "vault_address_terraform" {
   description = "Vault server address"
   type        = string
   default     = "http://localhost:8201"
@@ -22,6 +22,12 @@ variable "github_secret_name" {
   description = "Vault secret name for GitHub credentials"
   type        = string
   default     = "github"
+}
+
+variable "database_secret_name" {
+  description = "Vault secret name for database credentials"
+  type        = string
+  default     = "database"
 }
 
 # ── Kubernetes Configuration ──────────────────────────────

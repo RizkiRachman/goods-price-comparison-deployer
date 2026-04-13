@@ -18,7 +18,7 @@ set_defaults
 check_terraform
 
 # Export Vault config for Terraform (overrides terraform.tfvars values)
-export TF_VAR_vault_address="${VAULT_ADDRESS:-http://localhost:8201}"
+export TF_VAR_vault_address="${VAULT_ADDRESS_TERRAFORM:-http://localhost:8201}"
 export TF_VAR_vault_token="${VAULT_TOKEN:-}"
 
 if [ -z "${VAULT_TOKEN}" ]; then
@@ -31,7 +31,7 @@ echo "  INIT — Setup Infrastructure + Health Check"
 echo "=========================================="
 echo ""
 echo "  Service: ${DEPLOYMENT_NAME}"
-echo "  Vault:   ${VAULT_ADDRESS:-http://localhost:8201}"
+echo "  Vault:   ${VAULT_ADDRESS_TERRAFORM:-http://localhost:8201}"
 echo "  K8s:     ${PIPELINE_NAMESPACE}"
 echo ""
 
@@ -96,10 +96,10 @@ else
     warn "  ❌ Terraform secrets: not found in state"
 fi
 
-if kubectl get pipeline goods-price-pipeline -n "$PIPELINE_NAMESPACE" &>/dev/null; then
-    log "  ✅ Pipeline 'goods-price-pipeline': registered"
+if kubectl get pipeline "${DEPLOYMENT_NAME}-pipeline" -n "$PIPELINE_NAMESPACE" &>/dev/null; then
+    log "  ✅ Pipeline '${DEPLOYMENT_NAME}-pipeline': registered"
 else
-    warn "  ❌ Pipeline 'goods-price-pipeline': not found"
+    warn "  ❌ Pipeline '${DEPLOYMENT_NAME}-pipeline': not found"
 fi
 
 if kubectl get pvc "${DEPLOYMENT_NAME}-pvc" -n "$PIPELINE_NAMESPACE" &>/dev/null; then

@@ -1,0 +1,269 @@
+# Task: Database Provisioning
+# Creates component database, user, and pushes credentials to Vault
+# Runs inside pipeline before db-migrate
+apiVersion: tekton.dev/v1
+kind: Task
+metadata:
+  name: db-provision
+  namespace: ${PIPELINE_NAMESPACE}
+spec:
+  workspaces:
+    - name: source
+  params:
+    - name: COMPONENT_NAME
+      type: string
+      default: "${COMPONENT_NAME}"
+    - name: VAULT_ADDRESS_PIPELINE
+      type: string
+      default: "${VAULT_ADDRESS_PIPELINE}"
+    - name: INFRA_DB_MOUNT
+      type: string
+      default: "${INFRA_DB_MOUNT}"
+    - name: COMPONENT_MOUNT
+      type: string
+      default: "${COMPONENT_MOUNT}"
+    - name: POSTGRES_HOST
+      type: string
+      default: "${POSTGRES_HOST}"
+    - name: POSTGRES_PORT
+      type: string
+      default: "${POSTGRES_PORT}"
+  volumes:
+    - name: vault-token
+      secret:
+        secretName: vault-token
+        optional: true
+  steps:
+    - name: provision
+      image: alpine:3.19
+      workingDir: $(workspaces.source.path)
+      volumeMounts:
+        - name: vault-token
+          mountPath: /var/run/secrets/vault
+          readOnly: true
+      env:
+        - name: COMPONENT_NAME
+          value: $(params.COMPONENT_NAME)
+        - name: DB_NAME
+          value: $(params.COMPONENT_NAME)
+        - name: DB_USER
+          value: "$(params.COMPONENT_NAME)-user"
+        - name: VAULT_ADDRESS_PIPELINE
+          value: $(params.VAULT_ADDRESS_PIPELINE)
+        - name: VAULT_TOKEN
+          valueFrom:
+            secretKeyRef:
+              name: vault-token
+              key: token
+              optional: true
+        - name: INFRA_DB_MOUNT
+          value: $(params.INFRA_DB_MOUNT)
+        - name: COMPONENT_MOUNT
+          value: $(params.COMPONENT_MOUNT)
+        - name: POSTGRES_HOST
+          value: $(params.POSTGRES_HOST)
+        - name: POSTGRES_PORT
+          value: $(params.POSTGRES_PORT)
+      script: |
+        #!/bin/sh
+        set -e
+
+        echo "=========================================="
+        echo "  DB PROVISIONING TASK"
+        echo "=========================================="
+        echo ""
+        echo "📋 Configuration:"
+        echo "   Component Name: ${COMPONENT_NAME:-<NOT SET>}"
+        echo "   DB Name: ${DB_NAME:-<NOT SET>}"
+        echo "   DB User: ${DB_USER:-<NOT SET>}"
+        echo "   Postgres Host: ${POSTGRES_HOST:-<NOT SET>}"
+        echo "   Postgres Port: ${POSTGRES_PORT:-<NOT SET>}"
+        echo "   Vault Address: ${VAULT_ADDRESS_PIPELINE:-<NOT SET>}"
+        echo "   Infra Mount: ${INFRA_DB_MOUNT:-<NOT SET>}"
+        echo "   Component Mount: ${COMPONENT_MOUNT:-<NOT SET>}"
+        echo ""
+
+        # Validate required parameters
+        MISSING=""
+        [ -z "${COMPONENT_NAME}" ] && MISSING="${MISSING} COMPONENT_NAME"
+        [ -z "${VAULT_ADDRESS_PIPELINE}" ] && MISSING="${MISSING} VAULT_ADDRESS_PIPELINE"
+        [ -z "${VAULT_TOKEN}" ] && MISSING="${MISSING} VAULT_TOKEN"
+        [ -z "${POSTGRES_HOST}" ] && MISSING="${MISSING} POSTGRES_HOST"
+        [ -z "${POSTGRES_PORT}" ] && MISSING="${MISSING} POSTGRES_PORT"
+        
+        if [ -n "${MISSING}" ]; then
+            echo "❌ VALIDATION FAILED - Missing required parameters:"
+            for param in ${MISSING}; do
+                echo "   - ${param}"
+            done
+            echo ""
+            echo "Please check pipeline parameter configuration."
+            exit 1
+        fi
+        
+        echo "✅ All required parameters provided"
+        echo ""
+
+        # Install tools
+        echo "📦 Installing required tools (postgresql-client, curl, jq)..."
+        apk add --no-cache postgresql-client curl jq
+        echo "✅ Tools installed"
+        echo ""
+
+        # Verify Vault connectivity and token
+        echo "🔍 Verifying Vault connectivity..."
+        VAULT_HEALTH_URL="${VAULT_ADDRESS_PIPELINE}/v1/sys/health"
+        echo "   URL: ${VAULT_HEALTH_URL}"
+        VAULT_HEALTH=$(curl -s -o /dev/null -w "%{http_code}" --max-time 10 "${VAULT_HEALTH_URL}" 2>/dev/null)
+        case "$VAULT_HEALTH" in 200|429|472|473)
+            echo "✅ Vault is reachable at ${VAULT_ADDRESS_PIPELINE}" ;;
+        *)
+            echo "❌ Vault is not reachable at ${VAULT_ADDRESS_PIPELINE} (HTTP ${VAULT_HEALTH:-000})"
+            echo "   Check if dev-infrastructure is running and Vault is accessible from pods."
+            exit 1
+        esac
+
+        # Verify Vault token validity
+        echo "🔍 Verifying Vault token..."
+        # Mask token for logging (show first 4 and last 4 chars)
+        TOKEN_LEN=${#VAULT_TOKEN}
+        TOKEN_PREFIX=$(echo "$VAULT_TOKEN" | cut -c1-4)
+        TOKEN_SUFFIX=$(echo "$VAULT_TOKEN" | cut -c$((TOKEN_LEN-3))-$TOKEN_LEN)
+        TOKEN_MASKED="${TOKEN_PREFIX}...${TOKEN_SUFFIX}"
+        echo "   Token: ${TOKEN_MASKED}"
+        TOKEN_LOOKUP_URL="${VAULT_ADDRESS_PIPELINE}/v1/auth/token/lookup-self"
+        echo "   URL: ${TOKEN_LOOKUP_URL}"
+        TOKEN_LOOKUP=$(curl -s -H "X-Vault-Token: ${VAULT_TOKEN}" \
+            "${TOKEN_LOOKUP_URL}" 2>/dev/null)
+        if echo "$TOKEN_LOOKUP" | grep -q '"errors"'; then
+            echo "❌ Invalid or expired Vault token"
+            echo "   Response: $TOKEN_LOOKUP"
+            exit 1
+        fi
+        echo "✅ Vault token is valid"
+
+        # Verify infrastructure database credentials path exists
+        echo "🔍 Verifying infrastructure database credentials path..."
+        INFRA_CHECK_URL="${VAULT_ADDRESS_PIPELINE}/v1/${INFRA_DB_MOUNT}/data/database"
+        echo "   Path: ${INFRA_DB_MOUNT}/data/database"
+        echo "   URL: ${INFRA_CHECK_URL}"
+        INFRA_CHECK=$(curl -s -H "X-Vault-Token: ${VAULT_TOKEN}" \
+            "${INFRA_CHECK_URL}" 2>/dev/null)
+        if echo "$INFRA_CHECK" | grep -q '"errors"'; then
+            echo "❌ Infrastructure database credentials not found at ${INFRA_DB_MOUNT}/data/database"
+            echo "   Response: $INFRA_CHECK"
+            echo "   Ensure dev-infrastructure has provisioned database credentials to Vault."
+            exit 1
+        fi
+        echo "✅ Infrastructure database credentials path exists"
+        echo ""
+
+        # Generate random password (Alpine-compatible)
+        generate_password() {
+            # Try openssl first, fall back to /dev/urandom
+            if command -v openssl > /dev/null 2>&1; then
+                openssl rand -hex 16
+            else
+                head -c 16 /dev/urandom | od -An -tx1 | tr -d ' \n'
+            fi
+        }
+
+        echo "🗄️ Provisioning database for component: ${COMPONENT_NAME}"
+        echo ""
+
+        # Read infrastructure DB credentials from Vault
+        echo "🔐 Reading infrastructure database credentials from Vault..."
+        INFRA_RESPONSE=$(curl -s -H "X-Vault-Token: ${VAULT_TOKEN}" \
+            "${VAULT_ADDRESS_PIPELINE}/v1/${INFRA_DB_MOUNT}/data/database")
+
+        if echo "$INFRA_RESPONSE" | grep -q '"errors"'; then
+            echo "❌ Failed to read infrastructure credentials: $INFRA_RESPONSE"
+            exit 1
+        fi
+
+        INFRA_USER=$(echo "$INFRA_RESPONSE" | jq -r '.data.data.POSTGRES_USER')
+        INFRA_PASS=$(echo "$INFRA_RESPONSE" | jq -r '.data.data.POSTGRES_PASSWORD')
+
+        echo "Infrastructure DB: ${POSTGRES_HOST}:${POSTGRES_PORT} (user: ${INFRA_USER})"
+
+        # Check if component credentials exist in Vault
+        echo "Checking for existing credentials in Vault..."
+        COMP_RESPONSE=$(curl -s -H "X-Vault-Token: ${VAULT_TOKEN}" \
+            "${VAULT_ADDRESS_PIPELINE}/v1/${COMPONENT_MOUNT}/data/${COMPONENT_NAME}" 2>/dev/null || echo "")
+
+        if [ -n "$COMP_RESPONSE" ] && ! echo "$COMP_RESPONSE" | grep -q '"errors"'; then
+            EXISTING_DB=$(echo "$COMP_RESPONSE" | jq -r '.data.data."database-name" // empty')
+            EXISTING_USER=$(echo "$COMP_RESPONSE" | jq -r '.data.data."database-username" // empty')
+            EXISTING_PASS=$(echo "$COMP_RESPONSE" | jq -r '.data.data."database-password" // empty')
+            
+            if [ "$EXISTING_DB" = "$DB_NAME" ] && [ "$EXISTING_USER" = "$DB_USER" ] && [ -n "$EXISTING_PASS" ] && [ "$EXISTING_PASS" != "null" ]; then
+                echo "✅ Credentials already exist in Vault, skipping provisioning"
+                echo "   Vault: ${COMPONENT_MOUNT}/${COMPONENT_NAME}"
+                exit 0
+            else
+                echo "⚠️ Existing credentials incomplete (empty/null password), re-provisioning..."
+            fi
+        fi
+
+        # Generate password
+        DB_PASSWORD=$(generate_password)
+        if [ -z "${DB_PASSWORD}" ]; then
+            echo "❌ Failed to generate password"
+            exit 1
+        fi
+        # Mask password for logging (show first 2 and last 2 chars)
+        PASS_LEN=${#DB_PASSWORD}
+        PASS_PREFIX=$(echo "$DB_PASSWORD" | cut -c1-2)
+        PASS_SUFFIX=$(echo "$DB_PASSWORD" | cut -c$((PASS_LEN-1))-$PASS_LEN)
+        echo "Generated password for ${DB_USER}: ${PASS_PREFIX}****${PASS_SUFFIX} (${PASS_LEN} chars)"
+
+        # Create database if not exists
+        echo "Checking/Creating database: ${DB_NAME}"
+        DB_EXISTS=$(PGPASSWORD="${INFRA_PASS}" psql -h "${POSTGRES_HOST}" -p "${POSTGRES_PORT}" -U "${INFRA_USER}" -d postgres -t -c "SELECT 1 FROM pg_database WHERE datname = '${DB_NAME}';" 2>/dev/null | xargs || echo "")
+
+        if [ "$DB_EXISTS" = "1" ]; then
+            echo "Database ${DB_NAME} already exists"
+        else
+            PGPASSWORD="${INFRA_PASS}" psql -h "${POSTGRES_HOST}" -p "${POSTGRES_PORT}" -U "${INFRA_USER}" -d postgres -c "CREATE DATABASE \"${DB_NAME}\";"
+            echo "Created database: ${DB_NAME}"
+        fi
+
+        # Create or update user
+        USER_EXISTS=$(PGPASSWORD="${INFRA_PASS}" psql -h "${POSTGRES_HOST}" -p "${POSTGRES_PORT}" -U "${INFRA_USER}" -d postgres -t -c "SELECT 1 FROM pg_roles WHERE rolname = '${DB_USER}';" 2>/dev/null | xargs || echo "")
+
+        if [ "$USER_EXISTS" = "1" ]; then
+            echo "User ${DB_USER} exists, updating password..."
+            PGPASSWORD="${INFRA_PASS}" psql -h "${POSTGRES_HOST}" -p "${POSTGRES_PORT}" -U "${INFRA_USER}" -d postgres -c "ALTER USER \"${DB_USER}\" WITH PASSWORD '${DB_PASSWORD}';"
+        else
+            echo "Creating user: ${DB_USER}"
+            PGPASSWORD="${INFRA_PASS}" psql -h "${POSTGRES_HOST}" -p "${POSTGRES_PORT}" -U "${INFRA_USER}" -d postgres -c "CREATE USER \"${DB_USER}\" WITH PASSWORD '${DB_PASSWORD}';"
+        fi
+
+        # Grant privileges
+        echo "Granting privileges..."
+        PGPASSWORD="${INFRA_PASS}" psql -h "${POSTGRES_HOST}" -p "${POSTGRES_PORT}" -U "${INFRA_USER}" -d postgres -c "GRANT ALL PRIVILEGES ON DATABASE \"${DB_NAME}\" TO \"${DB_USER}\";"
+        PGPASSWORD="${INFRA_PASS}" psql -h "${POSTGRES_HOST}" -p "${POSTGRES_PORT}" -U "${INFRA_USER}" -d postgres -c "ALTER DATABASE \"${DB_NAME}\" OWNER TO \"${DB_USER}\";"
+
+        # Push to Vault
+        echo "Pushing credentials to Vault: ${COMPONENT_MOUNT}/${COMPONENT_NAME}"
+        VAULT_RESPONSE=$(curl -s -X POST -H "X-Vault-Token: ${VAULT_TOKEN}" \
+            -H "Content-Type: application/json" \
+            -d "{
+                \"data\": {
+                    \"database-name\": \"${DB_NAME}\",
+                    \"database-username\": \"${DB_USER}\",
+                    \"database-password\": \"${DB_PASSWORD}\"
+                }
+            }" \
+            "${VAULT_ADDRESS_PIPELINE}/v1/${COMPONENT_MOUNT}/data/${COMPONENT_NAME}")
+
+        if echo "$VAULT_RESPONSE" | grep -q '"errors"'; then
+            echo "❌ Failed to push to Vault: $VAULT_RESPONSE"
+            exit 1
+        fi
+
+        echo "✅ Database provisioned successfully!"
+        echo "   Database: ${DB_NAME}"
+        echo "   Username: ${DB_USER}"
+        echo "   Password: ${PASS_PREFIX}****${PASS_SUFFIX} (${PASS_LEN} chars)"
+        echo "   Vault: ${COMPONENT_MOUNT}/${COMPONENT_NAME}"

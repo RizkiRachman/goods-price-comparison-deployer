@@ -53,16 +53,16 @@ fi
 stage "Delete K8s Resources"
 
 log "Deleting PipelineRuns..."
-kubectl delete pipelineruns -n "$PIPELINE_NAMESPACE" -l tekton.dev/pipeline=goods-price-pipeline 2>/dev/null || true
+kubectl delete pipelineruns -n "$PIPELINE_NAMESPACE" -l tekton.dev/pipeline=${DEPLOYMENT_NAME}-pipeline 2>/dev/null || true
 
 log "Deleting TaskRuns..."
-kubectl delete taskruns -n "$PIPELINE_NAMESPACE" -l tekton.dev/pipeline=goods-price-pipeline 2>/dev/null || true
+kubectl delete taskruns -n "$PIPELINE_NAMESPACE" -l tekton.dev/pipeline=${DEPLOYMENT_NAME}-pipeline 2>/dev/null || true
 
 log "Deleting Pipeline..."
-kubectl delete pipeline goods-price-pipeline -n "$PIPELINE_NAMESPACE" 2>/dev/null || true
+kubectl delete pipeline "${DEPLOYMENT_NAME}-pipeline" -n "$PIPELINE_NAMESPACE" 2>/dev/null || true
 
 log "Deleting Tasks..."
-kubectl delete task cleanup maven-build maven-test docker-build deploy -n "$PIPELINE_NAMESPACE" 2>/dev/null || true
+kubectl delete task cleanup maven-build maven-test docker-build db-provision db-migrate deploy -n "$PIPELINE_NAMESPACE" 2>/dev/null || true
 
 log "Deleting PVCs..."
 kubectl delete pvc "${DEPLOYMENT_NAME}-pvc" maven-cache-pvc -n "$PIPELINE_NAMESPACE" 2>/dev/null || true

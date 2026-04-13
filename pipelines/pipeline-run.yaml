@@ -9,7 +9,7 @@ spec:
   taskRunTemplate:
     serviceAccountName: tekton-sa
   pipelineRef:
-    name: goods-price-pipeline
+    name: ${DEPLOYMENT_NAME}-pipeline
   workspaces:
     - name: shared-workspace
       persistentVolumeClaim:
@@ -35,3 +35,22 @@ spec:
       value: "${DEPLOYMENT_NAME}"
     - name: pipeline-mode
       value: "${PIPELINE_MODE}"
+    - name: pipeline-namespace
+      value: "${PIPELINE_NAMESPACE}"
+    - name: deployment-port
+      value: "${DEPLOYMENT_PORT}"
+    # Database provisioning and migration parameters
+    - name: vault-address-pipeline
+      value: "${VAULT_ADDRESS_PIPELINE}"
+    - name: component-name
+      value: "${COMPONENT_NAME}"
+    - name: postgres-host
+      value: "${POSTGRES_HOST}"
+    - name: postgres-port
+      value: "${POSTGRES_PORT}"
+    - name: infra-db-mount
+      value: "${INFRA_DB_MOUNT}"
+    - name: component-mount
+      value: "${COMPONENT_MOUNT}"
+    - name: migrations-path
+      value: "${MIGRATIONS_PATH}"

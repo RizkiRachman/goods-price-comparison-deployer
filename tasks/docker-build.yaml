@@ -17,6 +17,10 @@ spec:
     - name: CONTEXT
       type: string
       default: "."
+    - name: REGISTRY_MIRROR
+      type: string
+      default: "${REGISTRY_CLUSTER_HOST}:${REGISTRY_CLUSTER_PORT}"
+      description: "Local registry mirror to try before Docker Hub (avoids IPv6 routing issues)"
   steps:
     - name: build-and-push
       image: ${KANIKO_IMAGE}
@@ -30,6 +34,8 @@ spec:
         - --dockerfile=$(params.DOCKERFILE)
         - --context=$(params.CONTEXT)
         - --destination=$(params.IMAGE)
+        - --registry-mirror=$(params.REGISTRY_MIRROR)
         - --skip-tls-verify
         - --insecure
+        - --insecure-pull
         - --cache=true

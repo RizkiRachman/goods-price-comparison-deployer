@@ -82,7 +82,7 @@ load_env() {
 }
 
 set_defaults() {
-    VAULT_ADDRESS="${VAULT_ADDRESS:-http://localhost:8201}"
+    VAULT_ADDRESS_TERRAFORM="${VAULT_ADDRESS_TERRAFORM:-http://localhost:8201}"
     PIPELINE_NAMESPACE="${PIPELINE_NAMESPACE:-tekton-pipelines}"
     DEPLOYMENT_NAMESPACE="${DEPLOYMENT_NAMESPACE:-tekton-pipelines}"
     DEPLOYMENT_NAME="${DEPLOYMENT_NAME:-goods-price-service}"
@@ -100,8 +100,14 @@ set_defaults() {
     GIT_REPO_DEFAULT_BRANCH="${GIT_REPO_DEFAULT_BRANCH:-main}"
     PIPELINE_MODE="${PIPELINE_MODE:-full}"
 
-    # Database Migration defaults
-    DB_SECRET_NAME="${DB_SECRET_NAME:-db-credentials}"
+    # Database Provisioning defaults (Vault-based)
+    VAULT_ADDRESS_PIPELINE="${VAULT_ADDRESS_PIPELINE:-http://vault-host:8201}"
+    INFRA_DB_MOUNT="${INFRA_DB_MOUNT:-local/infrastructure}"
+    COMPONENT_MOUNT="${COMPONENT_MOUNT:-local/component}"
+    POSTGRES_HOST="${POSTGRES_HOST:-postgres-host}"
+    POSTGRES_PORT="${POSTGRES_PORT:-5432}"
+    MIGRATIONS_PATH="${MIGRATIONS_PATH:-src/main/resources/db/migration}"
+    COMPONENT_NAME="${COMPONENT_NAME:-${DEPLOYMENT_NAME}}"
 }
 
 # ── Prerequisite Checks ──────────────────────────────────
@@ -124,7 +130,7 @@ check_terraform() {
 }
 
 check_vault() {
-    local _vault_addr="${VAULT_ADDRESS:-http://localhost:8201}"
+    local _vault_addr="${VAULT_ADDRESS_TERRAFORM:-http://localhost:8201}"
     local _vault_http_code
     _vault_http_code=$(curl -s -o /dev/null -w "%{http_code}" --max-time 3 "${_vault_addr}/v1/sys/health" 2>/dev/null)
     if [[ "$_vault_http_code" =~ ^(200|429|472|473)$ ]]; then
@@ -135,8 +141,8 @@ check_vault() {
 }
 
 check_tekton_pipeline() {
-    if ! kubectl get pipeline goods-price-pipeline -n "${PIPELINE_NAMESPACE:-tekton-pipelines}" &>/dev/null; then
-        error "Pipeline 'goods-price-pipeline' not found. Run ./scripts/init.sh first."
+    if ! kubectl get pipeline "${DEPLOYMENT_NAME:-goods-price-service}-pipeline" -n "${PIPELINE_NAMESPACE:-tekton-pipelines}" &>/dev/null; then
+        error "Pipeline '${DEPLOYMENT_NAME:-goods-price-service}-pipeline' not found. Run ./scripts/init.sh first."
     fi
 }
 
@@ -169,7 +175,7 @@ health_check_infra() {
         warn "  ❌ Tekton Pipelines: not installed"; FAIL=$((FAIL+1))
     fi
 
-    local _vault_addr="${VAULT_ADDRESS:-http://localhost:8201}"
+    local _vault_addr="${VAULT_ADDRESS_TERRAFORM:-http://localhost:8201}"
     local _vault_http_code
     _vault_http_code=$(curl -s -o /dev/null -w "%{http_code}" --max-time 3 "${_vault_addr}/v1/sys/health" 2>/dev/null)
     # Vault /v1/sys/health returns 200 (active), 429 (standby), 472/473 (DR/perf standby) — all mean reachable
@@ -207,9 +213,9 @@ health_check_infra() {
 
 # ── K8s Resource Application ─────────────────────────────
 
-TASK_VARS='${PIPELINE_NAMESPACE} ${KUBECTL_IMAGE} ${MAVEN_IMAGE} ${KANIKO_IMAGE} ${DEPLOYMENT_NAMESPACE} ${DEPLOYMENT_NAME} ${DEPLOYMENT_PORT}'
-PIPELINE_VARS='${PIPELINE_NAMESPACE} ${GIT_REPO_URL} ${GIT_REPO_DEFAULT_BRANCH} ${IMAGE_NAME} ${IMAGE_TAG} ${REGISTRY_CLUSTER_HOST} ${REGISTRY_CLUSTER_PORT} ${DEPLOYMENT_NAMESPACE} ${DEPLOYMENT_NAME}'
-PIPELINE_RUN_VARS='${PIPELINE_NAMESPACE} ${GIT_REPO_URL} ${GIT_REPO_DEFAULT_BRANCH} ${IMAGE_NAME} ${IMAGE_TAG} ${REGISTRY_CLUSTER_HOST} ${REGISTRY_CLUSTER_PORT} ${DEPLOYMENT_NAMESPACE} ${DEPLOYMENT_NAME} ${PIPELINE_MODE} ${DB_SECRET_NAME}'
+TASK_VARS='${PIPELINE_NAMESPACE} ${KUBECTL_IMAGE} ${MAVEN_IMAGE} ${KANIKO_IMAGE} ${DEPLOYMENT_NAMESPACE} ${DEPLOYMENT_NAME} ${DEPLOYMENT_PORT} ${COMPONENT_NAME} ${VAULT_ADDRESS_PIPELINE} ${INFRA_DB_MOUNT} ${COMPONENT_MOUNT} ${POSTGRES_HOST} ${POSTGRES_PORT} ${MIGRATIONS_PATH}'
+PIPELINE_VARS='${PIPELINE_NAMESPACE} ${GIT_REPO_URL} ${GIT_REPO_DEFAULT_BRANCH} ${IMAGE_NAME} ${IMAGE_TAG} ${REGISTRY_CLUSTER_HOST} ${REGISTRY_CLUSTER_PORT} ${DEPLOYMENT_NAMESPACE} ${DEPLOYMENT_NAME} ${DEPLOYMENT_PORT} ${KUBECTL_IMAGE} ${COMPONENT_NAME} ${VAULT_ADDRESS_PIPELINE} ${INFRA_DB_MOUNT} ${COMPONENT_MOUNT} ${POSTGRES_HOST} ${POSTGRES_PORT} ${MIGRATIONS_PATH}'
+PIPELINE_RUN_VARS='${PIPELINE_NAMESPACE} ${GIT_REPO_URL} ${GIT_REPO_DEFAULT_BRANCH} ${IMAGE_NAME} ${IMAGE_TAG} ${REGISTRY_CLUSTER_HOST} ${REGISTRY_CLUSTER_PORT} ${DEPLOYMENT_NAMESPACE} ${DEPLOYMENT_NAME} ${DEPLOYMENT_PORT} ${PIPELINE_MODE} ${VAULT_ADDRESS_PIPELINE} ${COMPONENT_NAME} ${INFRA_DB_MOUNT} ${COMPONENT_MOUNT} ${POSTGRES_HOST} ${POSTGRES_PORT} ${MIGRATIONS_PATH}'
 PVC_VARS='${PIPELINE_NAMESPACE} ${DEPLOYMENT_NAME}'
 RBAC_VARS='${PIPELINE_NAMESPACE} ${DEPLOYMENT_NAME} ${RBAC_USER}'
 

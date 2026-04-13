@@ -1,6 +1,6 @@
 # ── Vault Configuration ────────────────────────────────────
 
-variable "vault_address" {
+variable "vault_address_terraform" {
   description = "Vault server address"
   type        = string
   default     = "http://localhost:8201"

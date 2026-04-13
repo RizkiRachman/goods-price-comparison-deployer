@@ -51,3 +51,15 @@ resource "kubernetes_secret_v1" "db_credentials" {
     jdbc_url = "jdbc:postgresql://${var.db_host}:${var.db_port}/${var.db_name}"
   }
 }
+
+# Vault token for pipeline tasks to authenticate with Vault
+resource "kubernetes_secret_v1" "vault_token" {
+  metadata {
+    name      = "vault-token"
+    namespace = var.namespace
+  }
+
+  data = {
+    token = var.vault_token
+  }
+}

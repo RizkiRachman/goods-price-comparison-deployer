@@ -3,7 +3,7 @@
 apiVersion: tekton.dev/v1
 kind: Pipeline
 metadata:
-  name: goods-price-pipeline
+  name: ${DEPLOYMENT_NAME}-pipeline
   namespace: ${PIPELINE_NAMESPACE}
 spec:
   workspaces:
@@ -37,15 +37,48 @@ spec:
     - name: deployment-name
       type: string
       default: "${DEPLOYMENT_NAME}"
+    - name: deployment-port
+      type: string
+      default: "${DEPLOYMENT_PORT}"
     - name: pipeline-mode
       type: string
       default: "full"
       description: "full = all tasks including deploy, plan = build+test only"
-    # Database migration parameters
-    - name: db-secret-name
+    - name: pipeline-namespace
       type: string
-      default: "db-credentials"
-      description: "K8s secret with JDBC URL, username, password"
+      default: "${PIPELINE_NAMESPACE}"
+    - name: kubectl-image
+      type: string
+      default: "${KUBECTL_IMAGE}"
+    # Database provisioning and migration parameters
+    - name: vault-address-pipeline
+      type: string
+      default: "${VAULT_ADDRESS_PIPELINE}"
+      description: "Vault address reachable from pods"
+    - name: component-name
+      type: string
+      default: "${COMPONENT_NAME}"
+      description: "Component name for Vault path"
+    - name: postgres-host
+      type: string
+      default: "${POSTGRES_HOST}"
+      description: "PostgreSQL host service DNS name"
+    - name: postgres-port
+      type: string
+      default: "${POSTGRES_PORT}"
+      description: "PostgreSQL port"
+    - name: infra-db-mount
+      type: string
+      default: "${INFRA_DB_MOUNT}"
+      description: "Vault mount path for infrastructure DB credentials"
+    - name: component-mount
+      type: string
+      default: "${COMPONENT_MOUNT}"
+      description: "Vault mount path for component credentials"
+    - name: migrations-path
+      type: string
+      default: "${MIGRATIONS_PATH}"
+      description: "Path to Flyway migrations directory"
 
   tasks:
     # 0. Cleanup workspace
@@ -107,10 +140,10 @@ spec:
         - name: IMAGE
           value: "$(params.registry-host):$(params.registry-port)/$(params.image-name):$(params.image-tag)"
 
-    # 5. Database migrations (skipped in plan mode)
-    - name: db-migrate
+    # 5. Database provisioning (create DB, user, push to Vault)
+    - name: db-provision
       taskRef:
-        name: db-migrate
+        name: db-provision
       runAfter: [build-image]
       when:
         - input: "$(params.pipeline-mode)"
@@ -120,10 +153,46 @@ spec:
         - name: source
           workspace: shared-workspace
       params:
-        - name: DB_SECRET_NAME
-          value: $(params.db-secret-name)
+        - name: COMPONENT_NAME
+          value: $(params.component-name)
+        - name: VAULT_ADDRESS_PIPELINE
+          value: $(params.vault-address-pipeline)
+        - name: POSTGRES_HOST
+          value: $(params.postgres-host)
+        - name: POSTGRES_PORT
+          value: $(params.postgres-port)
+        - name: INFRA_DB_MOUNT
+          value: $(params.infra-db-mount)
+        - name: COMPONENT_MOUNT
+          value: $(params.component-mount)
 
-    # 6. Deploy to Kubernetes (skipped in plan mode)
+    # 6. Database migrations (run Flyway)
+    - name: db-migrate
+      taskRef:
+        name: db-migrate
+      runAfter: [db-provision]
+      when:
+        - input: "$(params.pipeline-mode)"
+          operator: in
+          values: ["full"]
+      workspaces:
+        - name: source
+          workspace: shared-workspace
+      params:
+        - name: COMPONENT_NAME
+          value: $(params.component-name)
+        - name: VAULT_ADDRESS_PIPELINE
+          value: $(params.vault-address-pipeline)
+        - name: POSTGRES_HOST
+          value: $(params.postgres-host)
+        - name: POSTGRES_PORT
+          value: $(params.postgres-port)
+        - name: COMPONENT_MOUNT
+          value: $(params.component-mount)
+        - name: MIGRATIONS_PATH
+          value: $(params.migrations-path)
+
+    # 7. Deploy to Kubernetes (skipped in plan mode)
     - name: deploy
       taskRef:
         name: deploy
@@ -144,3 +213,7 @@ spec:
           value: $(params.deployment-namespace)
         - name: DEPLOYMENT_NAME
           value: $(params.deployment-name)
+        - name: DEPLOYMENT_PORT
+          value: $(params.deployment-port)
+
+  

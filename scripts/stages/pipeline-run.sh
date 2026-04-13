@@ -12,7 +12,7 @@ stage_pipeline_run() {
         stage "Pipeline Run — plan mode (clone → build → test only)"
     fi
 
-    step "Pipeline: goods-price-pipeline"
+    step "Pipeline: ${DEPLOYMENT_NAME}-pipeline"
     step "Mode: ${mode}"
     step "Namespace: ${PIPELINE_NAMESPACE}"
 

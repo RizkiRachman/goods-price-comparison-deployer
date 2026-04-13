@@ -45,3 +45,9 @@ variable "db_password" {
   type        = string
   sensitive   = true
 }
+
+variable "vault_token" {
+  description = "Vault token for pipeline tasks to authenticate with Vault"
+  type        = string
+  sensitive   = true
+}

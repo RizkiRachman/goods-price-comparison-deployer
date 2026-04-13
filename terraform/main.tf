@@ -10,7 +10,7 @@
 # ── Providers ──────────────────────────────────────────────
 
 provider "vault" {
-  address = var.vault_address
+  address = var.vault_address_terraform
   token   = var.vault_token
 }
 
@@ -41,6 +41,8 @@ module "k8s_secrets" {
   db_name     = module.vault_data.db_name
   db_username = module.vault_data.db_username
   db_password = module.vault_data.db_password
+  # Vault token for pipeline tasks to read from Vault
+  vault_token = var.vault_token
 }
 
 # Note: registry-credentials is managed by dev-infrastructure, NOT by this service.

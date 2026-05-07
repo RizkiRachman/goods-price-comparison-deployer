@@ -1,0 +1,103 @@
+# Pipeline: Security scan — SAST + DAST
+# Scope: clone → build → test → sast-scan → dast-scan
+# Use for: non-main branches (feature/develop/PR) — no deploy, no image push.
+# Targets the already-deployed service instance for DAST.
+apiVersion: tekton.dev/v1
+kind: Pipeline
+metadata:
+  name: ${DEPLOYMENT_NAME}-security-pipeline
+  namespace: ${PIPELINE_NAMESPACE}
+spec:
+  workspaces:
+    - name: shared-workspace
+  params:
+    - name: git-url
+      type: string
+      default: "${GIT_REPO_URL}"
+    - name: git-revision
+      type: string
+      default: "${GIT_REPO_DEFAULT_BRANCH}"
+    - name: test-goals
+      type: string
+      default: "test"
+    - name: fail-on-cvss
+      type: string
+      default: "7"
+      description: "OWASP: fail if CVE CVSS score >= this value"
+    - name: dast-target-url
+      type: string
+      default: "http://${DEPLOYMENT_NAME}.${DEPLOYMENT_NAMESPACE}.svc.cluster.local:${DEPLOYMENT_PORT}"
+      description: "Base URL of deployed service for ZAP to scan"
+    - name: dast-openapi-path
+      type: string
+      default: "/v3/api-docs"
+    - name: dast-fail-on-risk
+      type: string
+      default: "2"
+      description: "ZAP: fail on alerts at or above risk level (0=Info 1=Low 2=Medium 3=High)"
+
+  tasks:
+    - name: cleanup
+      taskRef:
+        name: cleanup
+      workspaces:
+        - name: output
+          workspace: shared-workspace
+
+    - name: clone
+      taskRef:
+        name: git-clone
+      runAfter: [cleanup]
+      workspaces:
+        - name: output
+          workspace: shared-workspace
+      params:
+        - name: url
+          value: $(params.git-url)
+        - name: revision
+          value: $(params.git-revision)
+
+    - name: build
+      taskRef:
+        name: maven-build
+      runAfter: [clone]
+      workspaces:
+        - name: output
+          workspace: shared-workspace
+
+    - name: test
+      taskRef:
+        name: maven-test
+      runAfter: [build]
+      workspaces:
+        - name: output
+          workspace: shared-workspace
+      params:
+        - name: GOALS
+          value: $(params.test-goals)
+
+    - name: sast-scan
+      taskRef:
+        name: sast-scan
+      runAfter: [test]
+      workspaces:
+        - name: output
+          workspace: shared-workspace
+      params:
+        - name: FAIL_ON_CVSS
+          value: $(params.fail-on-cvss)
+
+    - name: dast-scan
+      taskRef:
+        name: dast-scan
+      runAfter: [sast-scan]
+      workspaces:
+        - name: output
+          workspace: shared-workspace
+      params:
+        - name: TARGET_URL
+          value: $(params.dast-target-url)
+        - name: OPENAPI_PATH
+          value: $(params.dast-openapi-path)
+        - name: FAIL_ON_RISK
+          value: $(params.dast-fail-on-risk)

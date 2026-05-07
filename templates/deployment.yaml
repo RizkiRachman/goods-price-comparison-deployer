@@ -1,0 +1,50 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: __DEPLOYMENT_NAME__
+  labels:
+    app: __DEPLOYMENT_NAME__
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: __DEPLOYMENT_NAME__
+  template:
+    metadata:
+      labels:
+        app: __DEPLOYMENT_NAME__
+    spec:
+      containers:
+      - name: __DEPLOYMENT_NAME__
+        image: __IMAGE__
+        imagePullPolicy: Always
+        ports:
+        - containerPort: __DEPLOYMENT_PORT__
+        volumeMounts:
+        - name: app-config
+          mountPath: /app/config
+          readOnly: true
+        startupProbe:
+          httpGet:
+            path: /actuator/health/liveness
+            port: __DEPLOYMENT_PORT__
+          failureThreshold: 30
+          periodSeconds: 10
+        livenessProbe:
+          httpGet:
+            path: /actuator/health/liveness
+            port: __DEPLOYMENT_PORT__
+          failureThreshold: 3
+          periodSeconds: 30
+        readinessProbe:
+          httpGet:
+            path: /actuator/health/readiness
+            port: __DEPLOYMENT_PORT__
+          failureThreshold: 3
+          periodSeconds: 10
+      imagePullSecrets:
+      - name: registry-credentials
+      volumes:
+      - name: app-config
+        configMap:
+          name: __DEPLOYMENT_NAME__-config

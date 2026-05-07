@@ -1,0 +1,377 @@
+# Task: Register/Update API in Gravitee APIM
+# Uses Gravitee Management API to create API, add keyless plan, deploy and start.
+# Idempotent: updates existing API by name if found.
+#
+# Prerequisites:
+#   - Gravitee APIM Management API reachable from cluster
+#   - Vault contains username + password at COMPONENT_MOUNT/COMPONENT_NAME
+#   - K8s Service for the deployment already exists (created by deploy task)
+#
+# Supported: Gravitee 3.x and 4.x (auto-detected via /portal/environments)
+apiVersion: tekton.dev/v1
+kind: Task
+metadata:
+  name: gravitee-register
+  namespace: ${PIPELINE_NAMESPACE}
+spec:
+  workspaces:
+    - name: source
+  params:
+    - name: GRAVITEE_HOST
+      type: string
+      default: "${GRAVITEE_HOST}"
+      description: "Gravitee APIM Management API host (DNS or IP)"
+    - name: GRAVITEE_PORT
+      type: string
+      default: "${GRAVITEE_PORT}"
+      description: "Gravitee APIM Management API port"
+    - name: GRAVITEE_ORGANIZATION
+      type: string
+      default: "${GRAVITEE_ORGANIZATION}"
+      description: "Gravitee organization ID"
+    - name: GRAVITEE_ENVIRONMENT
+      type: string
+      default: "${GRAVITEE_ENVIRONMENT}"
+      description: "Gravitee environment ID"
+    - name: GRAVITEE_CONTEXT_PATH
+      type: string
+      default: "${GRAVITEE_CONTEXT_PATH}"
+      description: "Gateway context path for this API (e.g. /goods-price-service)"
+    - name: GRAVITEE_BACKEND_URL
+      type: string
+      default: "${GRAVITEE_BACKEND_URL}"
+      description: "Backend URL that Gravitee Gateway will proxy to. Leave empty to auto-build from K8s Service."
+    - name: DEPLOYMENT_NAME
+      type: string
+      default: "${DEPLOYMENT_NAME}"
+    - name: DEPLOYMENT_NAMESPACE
+      type: string
+      default: "${DEPLOYMENT_NAMESPACE}"
+    - name: DEPLOYMENT_PORT
+      type: string
+      default: "${DEPLOYMENT_PORT}"
+    - name: VAULT_ADDRESS_PIPELINE
+      type: string
+      default: "${VAULT_ADDRESS_PIPELINE}"
+    - name: COMPONENT_MOUNT
+      type: string
+      default: "${COMPONENT_MOUNT}"
+    - name: COMPONENT_NAME
+      type: string
+      default: "${COMPONENT_NAME}"
+    - name: IMAGE_TAG
+      type: string
+      default: "${IMAGE_TAG}"
+      description: "Image tag used as API version"
+    - name: INFRA_GRAVITEE_MOUNT
+      type: string
+      default: "${INFRA_GRAVITEE_MOUNT}"
+      description: "Vault mount path where shared Gravitee admin credentials live"
+    - name: GRAVITEE_VERSION
+      type: string
+      default: "${GRAVITEE_VERSION}"
+      description: "Gravitee major version: v3 or v4 (auto-detected if empty)"
+  volumes:
+    - name: vault-token
+      secret:
+        secretName: vault-token
+        optional: true
+  steps:
+    - name: gravitee-register
+      image: alpine:3.19
+      volumeMounts:
+        - name: vault-token
+          mountPath: /var/run/secrets/vault
+          readOnly: true
+      env:
+        - name: GRAVITEE_HOST
+          value: $(params.GRAVITEE_HOST)
+        - name: GRAVITEE_PORT
+          value: $(params.GRAVITEE_PORT)
+        - name: GRAVITEE_ORGANIZATION
+          value: $(params.GRAVITEE_ORGANIZATION)
+        - name: GRAVITEE_ENVIRONMENT
+          value: $(params.GRAVITEE_ENVIRONMENT)
+        - name: GRAVITEE_CONTEXT_PATH
+          value: $(params.GRAVITEE_CONTEXT_PATH)
+        - name: GRAVITEE_BACKEND_URL
+          value: $(params.GRAVITEE_BACKEND_URL)
+        - name: DEPLOYMENT_NAME
+          value: $(params.DEPLOYMENT_NAME)
+        - name: DEPLOYMENT_NAMESPACE
+          value: $(params.DEPLOYMENT_NAMESPACE)
+        - name: DEPLOYMENT_PORT
+          value: $(params.DEPLOYMENT_PORT)
+        - name: VAULT_ADDRESS_PIPELINE
+          value: $(params.VAULT_ADDRESS_PIPELINE)
+        - name: VAULT_TOKEN
+          valueFrom:
+            secretKeyRef:
+              name: vault-token
+              key: token
+              optional: true
+        - name: COMPONENT_MOUNT
+          value: $(params.COMPONENT_MOUNT)
+        - name: COMPONENT_NAME
+          value: $(params.COMPONENT_NAME)
+        - name: IMAGE_TAG
+          value: $(params.IMAGE_TAG)
+        - name: INFRA_GRAVITEE_MOUNT
+          value: $(params.INFRA_GRAVITEE_MOUNT)
+        - name: GRAVITEE_VERSION
+          value: $(params.GRAVITEE_VERSION)
+      script: |
+        #!/bin/sh
+        set -e
+
+        echo "⚙️  [1/8] Installing dependencies (curl, jq)..."
+        apk add --no-cache curl jq > /dev/null 2>&1
+        echo "   ✅ Dependencies ready"
+
+        # ── Helpers ───────────────────────────────────────────────
+        mask() {
+          val="$1"; len=$(echo -n "$val" | wc -c)
+          if [ "$len" -gt 8 ]; then
+            printf '%s****%s (%s chars)\n' "$(echo "$val" | cut -c1-3)" "$(echo "$val" | rev | cut -c1-3 | rev)" "$len"
+          else
+            echo "****"
+          fi
+        }
+        mgmt_url() { echo "http://${GRAVITEE_HOST}:${GRAVITEE_PORT}/management"; }
+
+        GV_VER=$(printenv GRAVITEE_VERSION || true)
+
+        echo ""
+        echo "⚙️  [2/8] Reading Gravitee credentials from Vault..."
+        echo "   Vault: ${VAULT_ADDRESS_PIPELINE}"
+        echo "   Mount: ${INFRA_GRAVITEE_MOUNT}/data/gravitee"
+        VAULT_RESP=$(curl -s -H "X-Vault-Token: ${VAULT_TOKEN}" \
+          "${VAULT_ADDRESS_PIPELINE}/v1/${INFRA_GRAVITEE_MOUNT}/data/gravitee" 2>/dev/null || true)
+
+        if [ -z "${VAULT_RESP}" ] || echo "${VAULT_RESP}" | grep -q '"errors"'; then
+          echo "   Fallback: trying ${COMPONENT_MOUNT}/data/${COMPONENT_NAME}..."
+          VAULT_RESP=$(curl -s -H "X-Vault-Token: ${VAULT_TOKEN}" \
+            "${VAULT_ADDRESS_PIPELINE}/v1/${COMPONENT_MOUNT}/data/${COMPONENT_NAME}" 2>/dev/null || true)
+        fi
+
+        if [ -z "${VAULT_RESP}" ] || echo "${VAULT_RESP}" | grep -q '"errors"'; then
+          echo "❌ Could not read Gravitee credentials from Vault"
+          echo "   Tried: ${INFRA_GRAVITEE_MOUNT}/data/gravitee and ${COMPONENT_MOUNT}/data/${COMPONENT_NAME}"
+          exit 1
+        fi
+
+        GV_USERNAME=$(echo "$VAULT_RESP" | jq -r '.data.data.username // .data.data.gravitee_username // .data.data.GRAVITEE_USERNAME // "admin"')
+        GV_PASSWORD=$(echo "$VAULT_RESP" | jq -r '.data.data.password // .data.data.gravitee_password // .data.data.GRAVITEE_PASSWORD // "admin"')
+        echo "   ✅ Credentials loaded — username: ${GV_USERNAME}, password: $(mask "${GV_PASSWORD}")"
+
+        echo ""
+        echo "⚙️  [3/8] Detecting Gravitee version..."
+        if [ -z "${GV_VER}" ]; then
+          echo "   Probing: $(mgmt_url)/openapi.json"
+          GV_MAJOR=$(curl -sf --max-time 5 "$(mgmt_url)/openapi.json" 2>/dev/null \
+            | jq -r '.info.version // ""' | cut -d. -f1)
+          if [ "${GV_MAJOR}" -ge 4 ] 2>/dev/null; then
+            GV_VER="v4"
+          else
+            GV_VER="v3"
+          fi
+          echo "   ✅ Detected: Gravitee ${GV_VER} (major=${GV_MAJOR})"
+        else
+          echo "   ✅ Configured: Gravitee ${GV_VER}"
+        fi
+
+        echo ""
+        echo "⚙️  [4/8] Authenticating with Gravitee Management API..."
+        if [ "${GV_VER}" = "v4" ]; then
+          echo "   POST $(mgmt_url)/organizations/${GRAVITEE_ORGANIZATION}/user/login"
+          AUTH_RESP=$(curl -sf -X POST \
+            "$(mgmt_url)/organizations/${GRAVITEE_ORGANIZATION}/user/login" \
+            -H "Content-Type: application/json" \
+            -H "Authorization: Basic $(echo -n "${GV_USERNAME}:${GV_PASSWORD}" | base64)" \
+            2>/dev/null || true)
+          TOKEN=$(echo "${AUTH_RESP}" | jq -r '.token // .payload // empty')
+        else
+          echo "   POST $(mgmt_url)/auth/login"
+          AUTH_RESP=$(curl -sf -X POST "$(mgmt_url)/auth/login" \
+            -H "Content-Type: application/json" \
+            -d "{\"username\":\"${GV_USERNAME}\",\"password\":\"${GV_PASSWORD}\"}" 2>/dev/null || true)
+          TOKEN=$(echo "${AUTH_RESP}" | jq -r '.token // empty')
+        fi
+
+        if [ -z "${TOKEN}" ] || [ "${TOKEN}" = "null" ]; then
+          echo "   ⚠️ Token login failed — falling back to Basic Auth"
+          AUTH_HEADER="Basic $(echo -n "${GV_USERNAME}:${GV_PASSWORD}" | base64)"
+        else
+          echo "   ✅ Token acquired: $(mask "${TOKEN}")"
+          AUTH_HEADER="Bearer ${TOKEN}"
+        fi
+
+        echo ""
+        echo "⚙️  [5/8] Resolving API config..."
+        if [ -z "${GRAVITEE_BACKEND_URL}" ]; then
+          echo "❌ GRAVITEE_BACKEND_URL is not set."
+          exit 1
+        fi
+        BACKEND="${GRAVITEE_BACKEND_URL}"
+        API_NAME="${DEPLOYMENT_NAME}"
+        API_VERSION="${IMAGE_TAG}"
+        CONTEXT_PATH="${GRAVITEE_CONTEXT_PATH}"
+        [ -n "${CONTEXT_PATH}" ] || CONTEXT_PATH="/${DEPLOYMENT_NAME}"
+        if [ "${GV_VER}" = "v4" ]; then
+          APIS_URL="$(mgmt_url)/v2/environments/${GRAVITEE_ENVIRONMENT}/apis"
+        else
+          APIS_URL="$(mgmt_url)/organizations/${GRAVITEE_ORGANIZATION}/environments/${GRAVITEE_ENVIRONMENT}/apis"
+        fi
+        echo "   API name:    ${API_NAME}"
+        echo "   Version:     ${API_VERSION}"
+        echo "   Context:     ${CONTEXT_PATH}"
+        echo "   Backend:     ${BACKEND}"
+        echo "   APIs URL:    ${APIS_URL}"
+
+        echo ""
+        echo "⚙️  [6/8] Checking for existing API '${API_NAME}'..."
+        echo "   GET ${APIS_URL}"
+        EXISTING=$(curl -sf -H "Authorization: ${AUTH_HEADER}" "${APIS_URL}" 2>/dev/null | \
+          jq -r --arg name "${API_NAME}" 'if .data then .data[]? else .[]? end | select(.name==$name) | .id' || true)
+
+        if [ -n "${EXISTING}" ]; then
+          echo "   Found (id=${EXISTING}) — updating..."
+          API_ID="${EXISTING}"
+          if [ "${GV_VER}" = "v4" ]; then
+            echo "   GET ${APIS_URL}/${API_ID}"
+            EXISTING_API=$(curl -sf -H "Authorization: ${AUTH_HEADER}" "${APIS_URL}/${API_ID}" 2>/dev/null || true)
+            if [ -z "${EXISTING_API}" ] || echo "${EXISTING_API}" | grep -q '"errors"'; then
+              echo "❌ Failed to fetch existing API definition"
+              echo "   Response: ${EXISTING_API}"
+              exit 1
+            fi
+            PAYLOAD=$(echo "${EXISTING_API}" | jq \
+              --arg name "${API_NAME}" \
+              --arg version "${API_VERSION}" \
+              --arg path "${CONTEXT_PATH}" \
+              --arg backend "${BACKEND}" \
+              '.name = $name
+              | .apiVersion = $version
+              | .description = ("API for " + $name)
+              | .listeners[0].paths = [{"path": $path}]
+              | .endpointGroups[0].endpoints[0].configuration.target = $backend')
+            UPDATE_RESP=$(curl -s -o /tmp/gv_update_resp.json -w "%{http_code}" -X PUT "${APIS_URL}/${API_ID}" \
+              -H "Authorization: ${AUTH_HEADER}" -H "Content-Type: application/json" \
+              -d "${PAYLOAD}" 2>/dev/null || true)
+            if [ "${UPDATE_RESP}" != "200" ] && [ "${UPDATE_RESP}" != "204" ]; then
+              echo "❌ API update failed (HTTP ${UPDATE_RESP})"
+              cat /tmp/gv_update_resp.json 2>/dev/null || true
+              exit 1
+            fi
+          else
+            PAYLOAD=$(jq -n --arg name "${API_NAME}" --arg version "${API_VERSION}" \
+              --arg path "${CONTEXT_PATH}" --arg backend "${BACKEND}" \
+              '{ name:$name, version:$version,
+                 proxy:{ context_path:$path, endpoints:[{name:"default",target:$backend,type:"http"}] } }')
+            UPDATE_RESP=$(curl -s -o /tmp/gv_update_resp.json -w "%{http_code}" -X PUT "${APIS_URL}/${API_ID}" \
+              -H "Authorization: ${AUTH_HEADER}" -H "Content-Type: application/json" \
+              -d "${PAYLOAD}" 2>/dev/null || true)
+            if [ "${UPDATE_RESP}" != "200" ] && [ "${UPDATE_RESP}" != "204" ]; then
+              echo "❌ API update failed (HTTP ${UPDATE_RESP})"
+              cat /tmp/gv_update_resp.json 2>/dev/null || true
+              exit 1
+            fi
+          fi
+          echo "   ✅ API updated"
+        else
+          echo "   Not found — creating new API..."
+          echo "   POST ${APIS_URL}"
+          if [ "${GV_VER}" = "v4" ]; then
+            PAYLOAD=$(jq -n --arg name "${API_NAME}" --arg version "${API_VERSION}" \
+              --arg path "${CONTEXT_PATH}" --arg backend "${BACKEND}" \
+              '{ name:$name, apiVersion:$version, definitionVersion:"V4", type:"PROXY",
+                 listeners:[{type:"HTTP",paths:[{path:$path}],entrypoints:[{type:"http-proxy"}]}],
+                 endpointGroups:[{name:"default-group",type:"http-proxy",
+                   endpoints:[{name:"default",type:"http-proxy",configuration:{target:$backend}}]}] }')
+          else
+            PAYLOAD=$(jq -n --arg name "${API_NAME}" --arg version "${API_VERSION}" \
+              --arg path "${CONTEXT_PATH}" --arg backend "${BACKEND}" \
+              '{ name:$name, version:$version, description:("API for "+$name),
+                 proxy:{ context_path:$path, endpoints:[{name:"default",target:$backend,type:"http"}] } }')
+          fi
+          CREATE_RESP=$(curl -s -X POST "${APIS_URL}" \
+            -H "Authorization: ${AUTH_HEADER}" -H "Content-Type: application/json" \
+            -d "${PAYLOAD}")
+          API_ID=$(echo "${CREATE_RESP}" | jq -r '.id // empty')
+          if [ -z "${API_ID}" ] || [ "${API_ID}" = "null" ]; then
+            echo "❌ Failed to create API"
+            echo "   Response: ${CREATE_RESP}"
+            exit 1
+          fi
+          echo "   ✅ API created (id=${API_ID})"
+        fi
+
+        PLANS_URL="${APIS_URL}/${API_ID}/plans"
+
+        echo ""
+        echo "⚙️  [7/8] Ensuring keyless plan..."
+        echo "   GET ${PLANS_URL}"
+        PLANS=$(curl -sf -H "Authorization: ${AUTH_HEADER}" "${PLANS_URL}" 2>/dev/null || true)
+        KEYLESS_PLAN=$(echo "${PLANS}" | jq -r 'if .data then .data[]? else .[]? end | select(.name=="Keyless") | .id' || true)
+
+        if [ -n "${KEYLESS_PLAN}" ]; then
+          echo "   ✅ Keyless plan exists (id=${KEYLESS_PLAN})"
+        else
+          echo "   Creating keyless plan — POST ${PLANS_URL}"
+          if [ "${GV_VER}" = "v4" ]; then
+            PLAN_PAYLOAD='{"name":"Keyless","description":"Keyless access","definitionVersion":"V4","validation":"MANUAL","security":{"type":"KEY_LESS"}}'
+          else
+            PLAN_PAYLOAD='{"name":"Keyless","description":"Keyless access","validation":"manual","security":"key_less"}'
+          fi
+          PLAN_RESP=$(curl -s -X POST "${PLANS_URL}" \
+            -H "Authorization: ${AUTH_HEADER}" -H "Content-Type: application/json" \
+            -d "${PLAN_PAYLOAD}" 2>/dev/null || true)
+          KEYLESS_PLAN=$(echo "${PLAN_RESP}" | jq -r '.id // empty')
+          if [ -z "${KEYLESS_PLAN}" ] || [ "${KEYLESS_PLAN}" = "null" ]; then
+            echo "❌ Failed to create keyless plan"
+            echo "   Response: ${PLAN_RESP}"
+            exit 1
+          fi
+          echo "   ✅ Keyless plan created (id=${KEYLESS_PLAN})"
+        fi
+
+        if [ -n "${KEYLESS_PLAN}" ]; then
+          echo "   Publishing plan — POST ${PLANS_URL}/${KEYLESS_PLAN}/_publish"
+          curl -sf -X POST "${PLANS_URL}/${KEYLESS_PLAN}/_publish" \
+            -H "Authorization: ${AUTH_HEADER}" > /dev/null 2>&1 \
+            && echo "   ✅ Plan published" \
+            || echo "   ⚠️ Plan publish skipped (may already be published)"
+        fi
+
+        echo ""
+        echo "⚙️  [8/8] Deploying and starting API..."
+        if [ "${GV_VER}" = "v4" ]; then
+          echo "   POST ${APIS_URL}/${API_ID}/deployments"
+          curl -sf -X POST "${APIS_URL}/${API_ID}/deployments" \
+            -H "Authorization: ${AUTH_HEADER}" > /dev/null 2>&1 \
+            && echo "   ✅ Deployed" || echo "   ⚠️ Deploy skipped (may already be deployed)"
+          echo "   POST ${APIS_URL}/${API_ID}/_start"
+          curl -sf -X POST "${APIS_URL}/${API_ID}/_start" \
+            -H "Authorization: ${AUTH_HEADER}" > /dev/null 2>&1 \
+            && echo "   ✅ Started" || echo "   ⚠️ Start skipped (may already be started)"
+        else
+          echo "   POST ${APIS_URL}/${API_ID}/deploy"
+          curl -sf -X POST "${APIS_URL}/${API_ID}/deploy" \
+            -H "Authorization: ${AUTH_HEADER}" > /dev/null 2>&1 \
+            && echo "   ✅ Deployed" || echo "   ⚠️ Deploy skipped"
+          echo "   POST ${APIS_URL}/${API_ID}?action=START"
+          curl -sf -X POST "${APIS_URL}/${API_ID}?action=START" \
+            -H "Authorization: ${AUTH_HEADER}" > /dev/null 2>&1 \
+            && echo "   ✅ Started" || echo "   ⚠️ Start skipped"
+        fi
+
+        echo ""
+        echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+        echo "  Gravitee API Registration Complete"
+        echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+        echo "  API Name:  ${API_NAME}"
+        echo "  API ID:    ${API_ID}"
+        echo "  Context:   ${CONTEXT_PATH}"
+        echo "  Backend:   ${BACKEND}"
+        echo "  Gateway:   http://${GRAVITEE_HOST}:${GRAVITEE_PORT}"
+        echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"

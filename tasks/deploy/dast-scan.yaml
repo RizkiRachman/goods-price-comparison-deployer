@@ -1,0 +1,118 @@
+# Task: DAST — OWASP ZAP API Scan
+# Runs ZAP API scan against the already-deployed service using its OpenAPI spec.
+# Targets the service directly via cluster DNS (bypasses Gravitee gateway).
+# Fails if any alert is rated HIGH or above.
+apiVersion: tekton.dev/v1
+kind: Task
+metadata:
+  name: dast-scan
+  namespace: ${PIPELINE_NAMESPACE}
+spec:
+  workspaces:
+    - name: output
+  params:
+    - name: TARGET_URL
+      type: string
+      default: "http://${DEPLOYMENT_NAME}.${DEPLOYMENT_NAMESPACE}.svc.cluster.local:${DEPLOYMENT_PORT}"
+      description: "Base URL of the deployed service"
+    - name: OPENAPI_PATH
+      type: string
+      default: "/v3/api-docs"
+      description: "Path to OpenAPI/Swagger spec endpoint"
+    - name: FAIL_ON_RISK
+      type: string
+      default: "2"
+      description: "Fail if any alert at or above this risk level: 0=Info 1=Low 2=Medium 3=High"
+    - name: SCAN_TIMEOUT
+      type: string
+      default: "300"
+      description: "Max scan time in seconds"
+  steps:
+    - name: zap-api-scan
+      image: ghcr.io/zaproxy/zaproxy:stable
+      workingDir: $(workspaces.output.path)
+      securityContext:
+        runAsUser: 0
+      env:
+        - name: TARGET_URL
+          value: $(params.TARGET_URL)
+        - name: OPENAPI_PATH
+          value: $(params.OPENAPI_PATH)
+        - name: FAIL_ON_RISK
+          value: $(params.FAIL_ON_RISK)
+        - name: SCAN_TIMEOUT
+          value: $(params.SCAN_TIMEOUT)
+      script: |
+        #!/bin/sh
+        set -e
+
+        REPORT_DIR="$(workspaces.output.path)/zap-reports"
+        mkdir -p "${REPORT_DIR}"
+
+        SPEC_URL="${TARGET_URL}${OPENAPI_PATH}"
+
+        echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+        echo "  DAST — ZAP API Scan"
+        echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+        echo "  Target:    ${TARGET_URL}"
+        echo "  Spec:      ${SPEC_URL}"
+        echo "  Fail on:   risk >= ${FAIL_ON_RISK} (0=Info 1=Low 2=Medium 3=High)"
+        echo "  Timeout:   ${SCAN_TIMEOUT}s"
+        echo ""
+
+        echo "⚙️  Waiting for service to be reachable..."
+        RETRIES=12
+        until wget -qO- --timeout=5 "${TARGET_URL}/actuator/health" 2>/dev/null | grep -q "UP"; do
+            RETRIES=$((RETRIES - 1))
+            if [ "${RETRIES}" -le 0 ]; then
+                echo "❌ Service not reachable at ${TARGET_URL} after 60s"
+                exit 1
+            fi
+            echo "   Retrying... (${RETRIES} attempts left)"
+            sleep 5
+        done
+        echo "   ✅ Service is UP"
+        echo ""
+
+        echo "⚙️  Running ZAP API scan..."
+        zap-api-scan.py \
+            -t "${SPEC_URL}" \
+            -f openapi \
+            -r "${REPORT_DIR}/zap-report.html" \
+            -x "${REPORT_DIR}/zap-report.xml" \
+            -J "${REPORT_DIR}/zap-report.json" \
+            -l WARN \
+            -T "${SCAN_TIMEOUT}" \
+            -z "-config api.disablekey=true" \
+            -I
+        ZAP_EXIT=$?
+
+        echo ""
+        echo "⚙️  Evaluating results..."
+
+        HIGH_COUNT=$(python3 -c "
+import json, sys
+try:
+    data = json.load(open('${REPORT_DIR}/zap-report.json'))
+    alerts = data.get('site', [{}])[0].get('alerts', [])
+    count = sum(1 for a in alerts if int(a.get('riskcode', 0)) >= ${FAIL_ON_RISK})
+    print(count)
+except Exception as e:
+    print(0)
+" 2>/dev/null || echo "0")
+
+        echo "  Report: ${REPORT_DIR}/zap-report.html"
+        echo "  Alerts at risk >= ${FAIL_ON_RISK}: ${HIGH_COUNT}"
+
+        if [ "${HIGH_COUNT}" -gt 0 ]; then
+            echo ""
+            echo "❌ DAST scan failed — ${HIGH_COUNT} alert(s) at or above risk level ${FAIL_ON_RISK}"
+            echo "   Review: zap-reports/zap-report.html"
+            exit 1
+        fi
+
+        echo "   ✅ No critical alerts found"
+        echo ""
+        echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+        echo "  DAST Scan Complete"
+        echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"

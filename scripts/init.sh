@@ -1,6 +1,6 @@
 #!/bin/bash
-# Init: Setup infrastructure + health check
-# Registers service-specific resources (Terraform secrets, RBAC, PVCs, tasks, pipeline)
+# Init: set up infrastructure + health check.
+# Registers service-specific resources (Terraform secrets, RBAC, PVCs, tasks, pipelines)
 # and verifies all infrastructure connectivity. Does NOT deploy the service.
 #
 # Usage: ./scripts/init.sh
@@ -9,15 +9,15 @@ set -e
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
-# Source lib + stages
 source "$SCRIPT_DIR/lib/common.sh"
+source "$SCRIPT_DIR/lib/vault.sh"
+source "$SCRIPT_DIR/lib/k8s.sh"
 source "$SCRIPT_DIR/stages/init-infra.sh"
 
 load_env
 set_defaults
 check_terraform
 
-# Export Vault config for Terraform (overrides terraform.tfvars values)
 export TF_VAR_vault_address="${VAULT_ADDRESS_TERRAFORM:-http://localhost:8201}"
 export TF_VAR_vault_token="${VAULT_TOKEN:-}"
 
@@ -37,24 +37,23 @@ echo ""
 
 timer_start
 
-# ── Health Check: verify dev-infrastructure is running ──
-
 stage "Health Check — verifying infrastructure connectivity"
 if ! health_check_infra; then
     error "Infrastructure health check failed. Start dev-infrastructure first."
 fi
 
-# ── Vault Reachability ──
-
 stage "Vault — checking connectivity"
 check_vault
 
-# ── Terraform: Vault → K8s secrets ──
+stage "Vault — ensuring KV mounts exist"
+ensure_vault_mounts
+
+stage "Vault — verifying required secrets exist"
+check_vault_secrets
 
 stage "Terraform — Vault → K8s secrets"
 cd "$TERRAFORM_DIR"
 
-# Ensure tfvars exists
 if [ ! -f "terraform.tfvars" ]; then
     warn "terraform.tfvars not found."
     if [ -f "terraform.tfvars.example" ]; then
@@ -67,58 +66,52 @@ if [ ! -f "terraform.tfvars" ]; then
     fi
 fi
 
-# Terraform init if needed
-if [ ! -d ".terraform" ]; then
-    log "Running terraform init..."
-    terraform init
-else
-    log "Terraform already initialized."
-fi
+log "Running terraform init..."
+terraform init -upgrade
 
-# Apply Terraform (create K8s secrets from Vault)
 log "Applying Terraform (creating K8s secrets from Vault)..."
 terraform apply -auto-approve
 log "Terraform apply complete — K8s secrets created from Vault."
 
-# ── K8s Resources: RBAC, PVCs, tasks, pipeline ──
-
-stage "K8s Resources — RBAC, PVCs, tasks, pipeline"
+stage "K8s Resources — RBAC, PVCs, tasks, pipelines"
 apply_k8s_resources
-
-# ── Final Health Check: verify service resources ──
 
 stage "Health Check — verifying service resources"
 
-# Verify Terraform state (secrets managed by Terraform, not kubectl)
 if terraform state list 2>/dev/null | grep -q "kubernetes_secret"; then
-    log "  ✅ Terraform secrets: registered in state"
+    log "  Terraform secrets: registered in state"
 else
-    warn "  ❌ Terraform secrets: not found in state"
+    warn "  Terraform secrets: not found in state"
+fi
+
+if kubectl get sa "${PIPELINE_SERVICE_ACCOUNT}" -n "$PIPELINE_NAMESPACE" &>/dev/null; then
+    log "  ServiceAccount '${PIPELINE_SERVICE_ACCOUNT}': exists"
+else
+    warn "  ServiceAccount '${PIPELINE_SERVICE_ACCOUNT}': not found"
 fi
 
 if kubectl get pipeline "${DEPLOYMENT_NAME}-pipeline" -n "$PIPELINE_NAMESPACE" &>/dev/null; then
-    log "  ✅ Pipeline '${DEPLOYMENT_NAME}-pipeline': registered"
+    log "  Pipeline '${DEPLOYMENT_NAME}-pipeline': registered"
 else
-    warn "  ❌ Pipeline '${DEPLOYMENT_NAME}-pipeline': not found"
+    warn "  Pipeline '${DEPLOYMENT_NAME}-pipeline': not found"
 fi
 
 if kubectl get pvc "${DEPLOYMENT_NAME}-pvc" -n "$PIPELINE_NAMESPACE" &>/dev/null; then
-    log "  ✅ PVC '${DEPLOYMENT_NAME}-pvc': bound"
+    log "  PVC '${DEPLOYMENT_NAME}-pvc': bound"
 else
-    warn "  ❌ PVC '${DEPLOYMENT_NAME}-pvc': not found"
+    warn "  PVC '${DEPLOYMENT_NAME}-pvc': not found"
 fi
 
 echo ""
 echo "=========================================="
-echo "  ✅ INIT COMPLETE — $(timer_elapsed)"
+echo "  INIT COMPLETE — $(timer_elapsed)"
 echo "=========================================="
 echo ""
 echo "  Infrastructure ready:"
 echo "    - K8s secrets from Vault"
-echo "    - RBAC (Role + RoleBinding)"
+echo "    - RBAC (pipeline + deployment namespaces)"
 echo "    - PVCs (workspace + maven cache)"
 echo "    - Tekton tasks + pipeline"
 echo ""
 echo "  Next steps:"
-echo "    ./scripts/apply.sh    # Build + deploy service"
-echo "    ./scripts/plan.sh     # Dry-run + diff preview"
+echo "    ./scripts/apply.sh    # Full build + deploy"

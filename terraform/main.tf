@@ -1,6 +1,8 @@
 # Terraform: Vault → Kubernetes Secrets (service-scoped)
-# Orchestrates modules to read from Vault and create K8s secrets.
-# Only manages secrets owned by this service — shared infra secrets are NOT managed here.
+# Three-module chain:
+#   vault-data              reads GitHub credentials from Vault
+#   k8s-maven-credentials   creates Maven build secrets (consumes vault-data outputs)
+#   k8s-vault-token         creates the Vault auth token secret (separate lifecycle)
 #
 # Usage:
 #   terraform init
@@ -19,30 +21,31 @@ provider "kubernetes" {
   config_context = var.kube_context
 }
 
-# ── Modules ───────────────────────────────────────────────
+# ── Data layer: read from Vault ───────────────────────────
 
-# Read service-scoped secrets from Vault
 module "vault_data" {
-  source               = "./modules/vault-data"
-  vault_mount          = var.vault_mount
-  github_secret_name   = var.github_secret_name
-  database_secret_name = var.database_secret_name
+  source             = "./modules/vault-data"
+  vault_mount        = var.vault_mount
+  github_secret_name = var.github_secret_name
 }
 
-# Create K8s secrets for Tekton pipeline tasks
-module "k8s_secrets" {
-  source       = "./modules/k8s-secrets"
-  namespace    = var.pipeline_namespace
+# ── Secret layer: create K8s secrets ─────────────────────
+
+# Maven build credentials — sourced from Vault, rotates with GitHub PAT.
+module "k8s_maven_credentials" {
+  source          = "./modules/k8s-maven-credentials"
+  namespace       = var.pipeline_namespace
   github_username = module.vault_data.github_username
   github_token    = module.vault_data.github_token
-  # Database credentials for db-migrate task
-  db_host     = module.vault_data.db_host
-  db_port     = module.vault_data.db_port
-  db_name     = module.vault_data.db_name
-  db_username = module.vault_data.db_username
-  db_password = module.vault_data.db_password
-  # Vault token for pipeline tasks to read from Vault
+}
+
+# Vault access token — passed directly, rotates independently from Maven creds.
+# Used by pipeline tasks (db-provision, db-migrate, config-apply) to call the Vault API.
+module "k8s_vault_token" {
+  source      = "./modules/k8s-vault-token"
+  namespace   = var.pipeline_namespace
   vault_token = var.vault_token
 }
 
 # Note: registry-credentials is managed by dev-infrastructure, NOT by this service.
+# Note: database credentials are read by pipeline tasks directly from Vault at runtime.

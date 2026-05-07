@@ -1,12 +1,13 @@
-# Task: Maven Test
 apiVersion: tekton.dev/v1
 kind: Task
 metadata:
-  name: maven-test
+  name: maven-build
   namespace: ${PIPELINE_NAMESPACE}
 spec:
   workspaces:
     - name: output
+    - name: maven-settings
+      optional: true
   volumes:
     - name: maven-settings
       secret:
@@ -15,12 +16,11 @@ spec:
       persistentVolumeClaim:
         claimName: maven-cache-pvc
   params:
-    - name: GOALS
+    - name: MAVEN_OPTS
       type: string
-      default: "test"
-      description: "Maven test goals: 'test' or 'verify'"
+      default: "-Xmx400m"
   steps:
-    - name: test
+    - name: build
       image: ${MAVEN_IMAGE}
       workingDir: $(workspaces.output.path)
       volumeMounts:
@@ -30,6 +30,8 @@ spec:
         - name: maven-repo
           mountPath: /root/.m2/repository
       env:
+        - name: MAVEN_OPTS
+          value: $(params.MAVEN_OPTS)
         - name: GITHUB_USERNAME
           valueFrom:
             secretKeyRef:
@@ -44,5 +46,7 @@ spec:
               optional: true
       command:
         - mvn
-        - "$(params.GOALS)"
+        - clean
+        - package
+        - -DskipTests
         - --batch-mode

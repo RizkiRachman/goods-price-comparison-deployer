@@ -163,7 +163,7 @@ All pipeline/task defaults come from `.env`. No hardcoded values in YAML — eve
 | `COMPONENT_MOUNT` | Vault path for component credentials | `local/component` |
 | `POSTGRES_HOST` | PostgreSQL host (in-cluster DNS) | `postgres-host` |
 | `POSTGRES_PORT` | PostgreSQL port | `5432` |
-| `MIGRATIONS_PATH` | Flyway migrations directory | `src/main/resources/db/migration` |
+| `MIGRATIONS_PATH` | Flyway migrations directory | `db/migration` |
 | `COMPONENT_NAME` | Component name for Vault path | defaults to `DEPLOYMENT_NAME` |
 | `KUBECTL_IMAGE` | kubectl container image | `bitnami/kubectl:latest` |
 | `MAVEN_IMAGE` | Maven container image | `maven:3.9-eclipse-temurin-17` |

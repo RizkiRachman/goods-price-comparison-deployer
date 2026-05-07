@@ -1,0 +1,200 @@
+# Task: Apply Configuration Properties
+# Clones the properties repo, reads Vault for DB credentials,
+# substitutes placeholders in application.properties, creates ConfigMap
+apiVersion: tekton.dev/v1
+kind: Task
+metadata:
+  name: config-apply
+  namespace: ${PIPELINE_NAMESPACE}
+spec:
+  workspaces:
+    - name: source
+  params:
+    - name: PROPERTIES_REPO_URL
+      type: string
+      default: "${PROPERTIES_REPO_URL}"
+    - name: PROPERTIES_REPO_DEFAULT_BRANCH
+      type: string
+      default: "${PROPERTIES_REPO_DEFAULT_BRANCH}"
+    - name: ENVIRONMENT_NAME
+      type: string
+      default: "${ENVIRONMENT_NAME}"
+    - name: DEPLOYMENT_NAME
+      type: string
+      default: "${DEPLOYMENT_NAME}"
+    - name: NAMESPACE
+      type: string
+      default: "${DEPLOYMENT_NAMESPACE}"
+    - name: VAULT_ADDRESS_PIPELINE
+      type: string
+      default: "${VAULT_ADDRESS_PIPELINE}"
+    - name: COMPONENT_MOUNT
+      type: string
+      default: "${COMPONENT_MOUNT}"
+    - name: COMPONENT_NAME
+      type: string
+      default: "${COMPONENT_NAME}"
+    - name: POSTGRES_HOST
+      type: string
+      default: "${POSTGRES_HOST}"
+    - name: POSTGRES_PORT
+      type: string
+      default: "${POSTGRES_PORT}"
+  volumes:
+    - name: vault-token
+      secret:
+        secretName: vault-token
+        optional: true
+  steps:
+    - name: config-apply
+      image: ${KUBECTL_IMAGE}
+      volumeMounts:
+        - name: vault-token
+          mountPath: /var/run/secrets/vault
+          readOnly: true
+      env:
+        - name: PROPERTIES_REPO_URL
+          value: $(params.PROPERTIES_REPO_URL)
+        - name: PROPERTIES_REPO_DEFAULT_BRANCH
+          value: $(params.PROPERTIES_REPO_DEFAULT_BRANCH)
+        - name: ENVIRONMENT_NAME
+          value: $(params.ENVIRONMENT_NAME)
+        - name: DEPLOYMENT_NAME
+          value: $(params.DEPLOYMENT_NAME)
+        - name: NAMESPACE
+          value: $(params.NAMESPACE)
+        - name: VAULT_ADDRESS_PIPELINE
+          value: $(params.VAULT_ADDRESS_PIPELINE)
+        - name: VAULT_TOKEN
+          valueFrom:
+            secretKeyRef:
+              name: vault-token
+              key: token
+              optional: true
+        - name: COMPONENT_MOUNT
+          value: $(params.COMPONENT_MOUNT)
+        - name: COMPONENT_NAME
+          value: $(params.COMPONENT_NAME)
+        - name: POSTGRES_HOST
+          value: $(params.POSTGRES_HOST)
+        - name: POSTGRES_PORT
+          value: $(params.POSTGRES_PORT)
+      script: |
+        #!/bin/bash
+        set -e
+
+        apt-get update -qq && apt-get install -y -qq git curl
+
+        # Helper function to mask sensitive values in output
+        mask_sensitive() {
+            local input="$1"
+            # Mask VAULT_TOKEN if it appears in output
+            if [ -n "$VAULT_TOKEN" ]; then
+                input=$(echo "$input" | sed "s/${VAULT_TOKEN}/****MASKED****/g")
+            fi
+            echo "$input"
+        }
+
+        # Mask token for logging (show first 4 and last 4 chars)
+        TOKEN_LEN=${#VAULT_TOKEN}
+        if [ "$TOKEN_LEN" -gt 8 ]; then
+            TOKEN_PREFIX=$(echo "$VAULT_TOKEN" | cut -c1-4)
+            TOKEN_SUFFIX=$(echo "$VAULT_TOKEN" | cut -c$((TOKEN_LEN-3))-$TOKEN_LEN)
+            TOKEN_MASKED="${TOKEN_PREFIX}****${TOKEN_SUFFIX}"
+        else
+            TOKEN_MASKED="****"
+        fi
+        echo "📋 Reading credentials from Vault..."
+        echo "   Using Vault token: ${TOKEN_MASKED} (${TOKEN_LEN} chars)"
+
+        VAULT_RESPONSE=$(curl -s -H "X-Vault-Token: ${VAULT_TOKEN}" \
+            "${VAULT_ADDRESS_PIPELINE}/v1/${COMPONENT_MOUNT}/data/${COMPONENT_NAME}" 2>&1)
+
+        if echo "$VAULT_RESPONSE" | grep -q '"errors"' || [ -z "$VAULT_RESPONSE" ]; then
+            echo "❌ Failed to read credentials from Vault: ${COMPONENT_MOUNT}/${COMPONENT_NAME}"
+            echo "   Response: $(mask_sensitive "$VAULT_RESPONSE")"
+            exit 1
+        fi
+
+        # Dynamically export all Vault keys as UPPERCASE env vars
+        # e.g. Vault "database_name" → env DATABASE_NAME, Vault "database_password" → env DATABASE_PASSWORD
+        # Adding a new key to Vault automatically makes it available as a placeholder — no code changes needed
+        # Convention: Terraform/Vault use lowercase (database_name), env vars/properties use UPPERCASE (DATABASE_NAME)
+        ENVSUBST_VARS=""
+        for KEY in $(echo "$VAULT_RESPONSE" | jq -r '.data.data | keys[]'); do
+            VALUE=$(echo "$VAULT_RESPONSE" | jq -r ".data.data.\"$KEY\"")
+            # Convert lowercase underscore to UPPERCASE (database_name → DATABASE_NAME)
+            ENV_KEY="$(echo "$KEY" | tr '[:lower:]' '[:upper:]')"
+            export "$ENV_KEY"="$VALUE"
+
+            # Mask passwords for logging
+            if echo "$KEY" | grep -qi "password\|secret\|token"; then
+                PASS_LEN=${#VALUE}
+                if [ "$PASS_LEN" -gt 4 ]; then
+                    PASS_PREFIX=$(echo "$VALUE" | cut -c1-2)
+                    PASS_SUFFIX=$(echo "$VALUE" | cut -c$((PASS_LEN-1))-$PASS_LEN)
+                    VALUE="${PASS_PREFIX}****${PASS_SUFFIX} (${PASS_LEN} chars)"
+                else
+                    VALUE="****"
+                fi
+            fi
+            echo "   ${ENV_KEY}=${VALUE}"
+            ENVSUBST_VARS="${ENVSUBST_VARS} \${${ENV_KEY}}"
+        done
+
+        # Also export pipeline params that map to properties placeholders
+        export DATABASE_HOST="${POSTGRES_HOST}"
+        export DATABASE_PORT="${POSTGRES_PORT}"
+        ENVSUBST_VARS="${ENVSUBST_VARS} \${DATABASE_HOST} \${DATABASE_PORT}"
+
+        # Read LLM credentials from component Vault path (same secret as DB credentials).
+        # Convention: Vault key=<PROVIDER>_API_KEY → env var=LLM_<PROVIDER>_API_KEY
+        # To add a new provider, append its Vault key name to the list below.
+        echo "📋 Reading LLM credentials from Vault..."
+        LLM_KEYS_FOUND=0
+        for VAULT_KEY in GEMINI_API_KEY GROQ_API_KEY OPENAPI_API_KEY ANTHROPIC_API_KEY; do
+            KEY_VALUE=$(echo "$VAULT_RESPONSE" | jq -r ".data.data.${VAULT_KEY} // empty")
+            if [ -n "$KEY_VALUE" ] && [ "$KEY_VALUE" != "null" ]; then
+                ENV_VAR="LLM_${VAULT_KEY}"
+                export "${ENV_VAR}"="${KEY_VALUE}"
+                ENVSUBST_VARS="${ENVSUBST_VARS} \${${ENV_VAR}}"
+                KEY_LEN=${#KEY_VALUE}
+                echo "   ${ENV_VAR}=**** (${KEY_LEN} chars)"
+                LLM_KEYS_FOUND=$((LLM_KEYS_FOUND + 1))
+            else
+                echo "   ⚠️ ${VAULT_KEY} not set in Vault at ${COMPONENT_MOUNT}/${COMPONENT_NAME} (optional)"
+            fi
+        done
+        echo "   ${LLM_KEYS_FOUND} LLM key(s) loaded"
+
+        # Clone properties repository
+        PROPERTIES_DIR="/tmp/properties-repo"
+        echo "📦 Cloning properties repository: ${PROPERTIES_REPO_URL}"
+        git clone --depth 1 --branch "${PROPERTIES_REPO_DEFAULT_BRANCH}" \
+            "${PROPERTIES_REPO_URL}" "${PROPERTIES_DIR}"
+
+        # Verify environment directory exists
+        PROPERTIES_FILE="${PROPERTIES_DIR}/${ENVIRONMENT_NAME}/application.properties"
+        if [ ! -f "$PROPERTIES_FILE" ]; then
+            echo "❌ Properties file not found: ${PROPERTIES_FILE}"
+            echo "   Available environments:"
+            ls -1 "${PROPERTIES_DIR}/" 2>/dev/null || echo "   (none)"
+            exit 1
+        fi
+
+        # Substitute all placeholders with actual values
+        envsubst "$ENVSUBST_VARS" \
+            < "$PROPERTIES_FILE" > /tmp/application.properties
+
+        echo "📄 Resolved ${ENVIRONMENT_NAME}/application.properties:"
+        sed -e 's/\(spring.datasource.password=\).*/\1****/' \
+            -e 's/\(llm.gemini.api-key=\).*/\1****/' \
+            /tmp/application.properties
+
+        # Create ConfigMap with resolved properties
+        CONFIG_NAME="${DEPLOYMENT_NAME}-config"
+        kubectl create configmap "${CONFIG_NAME}" \
+          -n "${NAMESPACE}" \
+          --from-file=application.properties=/tmp/application.properties \
+          --dry-run=client -o yaml | kubectl apply -n "${NAMESPACE}" -f -
+        echo "📝 Created/updated ConfigMap: ${CONFIG_NAME}"

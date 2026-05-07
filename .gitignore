@@ -10,9 +10,21 @@
 # Memory context
 .memory/
 
+# AI tooling
+.opencode/
+.claude/
+.agents/
+AGENTS.md
+
 # Terraform state (contains secrets)
 terraform/.terraform/
 terraform/*.tfstate
 terraform/*.tfstate.*
 terraform/*.lock.hcl
 terraform/terraform.tfvars
+
+opencode.json
+.opencode
+
+/helpers
+

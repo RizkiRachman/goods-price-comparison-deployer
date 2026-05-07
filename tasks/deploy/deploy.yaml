@@ -23,12 +23,29 @@ spec:
     - name: DEPLOYMENT_PORT
       type: string
       default: "${DEPLOYMENT_PORT}"
+    - name: DEPLOYMENT_NODEPORT
+      type: string
+      default: "${DEPLOYMENT_NODEPORT}"
     - name: ROLLOUT_TIMEOUT
       type: string
       default: "300s"
+  volumes:
+    - name: deployment-template
+      configMap:
+        name: deployment-template
+    - name: service-template
+      configMap:
+        name: service-template
   steps:
     - name: deploy
       image: ${KUBECTL_IMAGE}
+      volumeMounts:
+        - name: deployment-template
+          mountPath: /var/run/templates/deployment
+          readOnly: true
+        - name: service-template
+          mountPath: /var/run/templates/service
+          readOnly: true
       env:
         - name: IMAGE
           value: $(params.IMAGE)
@@ -38,47 +55,50 @@ spec:
           value: $(params.NAMESPACE)
         - name: DEPLOYMENT_NAME
           value: $(params.DEPLOYMENT_NAME)
+        - name: DEPLOYMENT_PORT
+          value: $(params.DEPLOYMENT_PORT)
+        - name: DEPLOYMENT_NODEPORT
+          value: $(params.DEPLOYMENT_NODEPORT)
       script: |
         #!/bin/bash
         set -e
-        
+
         echo "🚀 Deploying ${IMAGE} to ${NAMESPACE}"
-        
+
         cd $(workspaces.source.path)
-        
+
         # Extract registry host from image
         REGISTRY_HOST=$(echo "${IMAGE}" | cut -d'/' -f1)
-        
+
         echo "Configuring insecure registry: ${REGISTRY_HOST}"
-        
-        # Check if deployment exists, if not create a basic one
-        if ! kubectl get deployment "${DEPLOYMENT_NAME}" -n "${NAMESPACE}" &>/dev/null; then
-          echo "📄 Creating new deployment..."
-          kubectl create deployment "${DEPLOYMENT_NAME}" \
-            -n "${NAMESPACE}" \
-            --image="${IMAGE}" \
-            --port=$(params.DEPLOYMENT_PORT)
-          
-          # Set image pull policy and pull secrets
-          kubectl patch deployment "${DEPLOYMENT_NAME}" -n "${NAMESPACE}" -p '{"spec":{"template":{"spec":{"containers":[{"name":"'"${DEPLOYMENT_NAME}"'","imagePullPolicy":"Always"}],"imagePullSecrets":[{"name":"registry-credentials"}]}}}}' 2>/dev/null || true
-        else
-          echo "📄 Updating existing deployment..."
-          echo "  Container name: ${DEPLOYMENT_NAME}"
 
-          kubectl patch deployment "${DEPLOYMENT_NAME}" \
-            -n "${NAMESPACE}" \
-            -p "{\"spec\":{\"template\":{\"spec\":{\"containers\":[{\"name\":\"${DEPLOYMENT_NAME}\",\"image\":\"${IMAGE}\",\"imagePullPolicy\":\"Always\"}],\"imagePullSecrets\":[{\"name\":\"registry-credentials\"}]}}}}" || true
-
-          # Force restart to ensure new pods are created (important for :latest tags)
-          kubectl rollout restart deployment/"${DEPLOYMENT_NAME}" -n "${NAMESPACE}"
+        # Delete existing deployment to avoid stale containers from merging
+        if kubectl get deployment "${DEPLOYMENT_NAME}" -n "${NAMESPACE}" &>/dev/null; then
+          echo "🗑️ Deleting existing deployment to ensure clean state..."
+          kubectl delete deployment "${DEPLOYMENT_NAME}" -n "${NAMESPACE}" --wait=true
         fi
-        
+
+        # Substitute placeholders in deployment template and apply
+        sed -e "s|__DEPLOYMENT_NAME__|${DEPLOYMENT_NAME}|g" \
+            -e "s|__IMAGE__|${IMAGE}|g" \
+            -e "s|__DEPLOYMENT_PORT__|$(params.DEPLOYMENT_PORT)|g" \
+            /var/run/templates/deployment/deployment.yaml > /tmp/deployment.yaml
+        kubectl apply -n "${NAMESPACE}" -f /tmp/deployment.yaml
+
+        # Apply (or update) the K8s Service for this deployment
+        sed -e "s|__DEPLOYMENT_NAME__|${DEPLOYMENT_NAME}|g" \
+            -e "s|__DEPLOYMENT_PORT__|$(params.DEPLOYMENT_PORT)|g" \
+            -e "s|__DEPLOYMENT_NODEPORT__|$(params.DEPLOYMENT_NODEPORT)|g" \
+            /var/run/templates/service/service.yaml > /tmp/service.yaml
+        kubectl apply -n "${NAMESPACE}" -f /tmp/service.yaml
+        echo "📡 Service '${DEPLOYMENT_NAME}' applied"
+
         echo "⏳ Waiting for rollout to complete (timeout: $(params.ROLLOUT_TIMEOUT))..."
-        
+
         if kubectl rollout status deployment/"${DEPLOYMENT_NAME}" \
           -n "${NAMESPACE}" \
           --timeout=$(params.ROLLOUT_TIMEOUT); then
-          
+
           echo "✅ Deployment successful!"
           kubectl get deployment "${DEPLOYMENT_NAME}" -n "${NAMESPACE}"
           kubectl get pods -n "${NAMESPACE}" -l app="${DEPLOYMENT_NAME}"

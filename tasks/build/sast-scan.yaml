@@ -1,14 +1,24 @@
-# Task: Maven Build (compile + package, skip tests)
+# Task: SAST — OWASP Dependency-Check
+# Runs mvn verify -P security-check to scan Maven dependencies for known CVEs.
+# Fails if any dependency has CVSS score >= 7 (configurable via FAIL_ON_CVSS).
+# NVD database is cached in the maven-cache-pvc to avoid re-downloading on every run.
 apiVersion: tekton.dev/v1
 kind: Task
 metadata:
-  name: maven-build
+  name: sast-scan
   namespace: ${PIPELINE_NAMESPACE}
 spec:
   workspaces:
     - name: output
-    - name: maven-settings
-      optional: true
+  params:
+    - name: FAIL_ON_CVSS
+      type: string
+      default: "7"
+      description: "Fail build if any CVE has CVSS score >= this value"
+    - name: NVD_API_KEY
+      type: string
+      default: ""
+      description: "Optional NVD API key to speed up CVE DB download"
   volumes:
     - name: maven-settings
       secret:
@@ -16,12 +26,8 @@ spec:
     - name: maven-repo
       persistentVolumeClaim:
         claimName: maven-cache-pvc
-  params:
-    - name: MAVEN_OPTS
-      type: string
-      default: "-Xmx400m"
   steps:
-    - name: build
+    - name: owasp-dependency-check
       image: ${MAVEN_IMAGE}
       workingDir: $(workspaces.output.path)
       volumeMounts:
@@ -31,8 +37,6 @@ spec:
         - name: maven-repo
           mountPath: /root/.m2/repository
       env:
-        - name: MAVEN_OPTS
-          value: $(params.MAVEN_OPTS)
         - name: GITHUB_USERNAME
           valueFrom:
             secretKeyRef:
@@ -45,9 +49,16 @@ spec:
               name: github-maven-credentials
               key: token
               optional: true
+        - name: FAIL_ON_CVSS
+          value: $(params.FAIL_ON_CVSS)
+        - name: NVD_API_KEY
+          value: $(params.NVD_API_KEY)
       command:
         - mvn
-        - clean
-        - package
-        - -DskipTests
+        - verify
+        - -P
+        - security-check
         - --batch-mode
+        - -DfailBuildOnCVSS=$(params.FAIL_ON_CVSS)
+        - -Dformats=HTML,JSON
+        - -Dodc.outputDirectory=target/dependency-check-report

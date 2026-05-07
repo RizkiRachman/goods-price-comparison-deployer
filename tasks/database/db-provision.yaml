@@ -192,9 +192,9 @@ spec:
             "${VAULT_ADDRESS_PIPELINE}/v1/${COMPONENT_MOUNT}/data/${COMPONENT_NAME}" 2>/dev/null || echo "")
 
         if [ -n "$COMP_RESPONSE" ] && ! echo "$COMP_RESPONSE" | grep -q '"errors"'; then
-            EXISTING_DB=$(echo "$COMP_RESPONSE" | jq -r '.data.data."database-name" // empty')
-            EXISTING_USER=$(echo "$COMP_RESPONSE" | jq -r '.data.data."database-username" // empty')
-            EXISTING_PASS=$(echo "$COMP_RESPONSE" | jq -r '.data.data."database-password" // empty')
+            EXISTING_DB=$(echo "$COMP_RESPONSE" | jq -r '.data.data."database_name" // empty')
+            EXISTING_USER=$(echo "$COMP_RESPONSE" | jq -r '.data.data."database_username" // empty')
+            EXISTING_PASS=$(echo "$COMP_RESPONSE" | jq -r '.data.data."database_password" // empty')
             
             if [ "$EXISTING_DB" = "$DB_NAME" ] && [ "$EXISTING_USER" = "$DB_USER" ] && [ -n "$EXISTING_PASS" ] && [ "$EXISTING_PASS" != "null" ]; then
                 echo "✅ Credentials already exist in Vault, skipping provisioning"
@@ -250,9 +250,9 @@ spec:
             -H "Content-Type: application/json" \
             -d "{
                 \"data\": {
-                    \"database-name\": \"${DB_NAME}\",
-                    \"database-username\": \"${DB_USER}\",
-                    \"database-password\": \"${DB_PASSWORD}\"
+                    \"database_name\": \"${DB_NAME}\",
+                    \"database_username\": \"${DB_USER}\",
+                    \"database_password\": \"${DB_PASSWORD}\"
                 }
             }" \
             "${VAULT_ADDRESS_PIPELINE}/v1/${COMPONENT_MOUNT}/data/${COMPONENT_NAME}")

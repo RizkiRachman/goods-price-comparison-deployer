@@ -1,5 +1,5 @@
-# PipelineRun: Execute the goods-price-service pipeline
-# pipeline-mode: "full" (all tasks) or "plan" (build+test only)
+# PipelineRun: Full CI/CD pipeline
+# Triggers: ${DEPLOYMENT_NAME}-pipeline
 apiVersion: tekton.dev/v1
 kind: PipelineRun
 metadata:
@@ -7,7 +7,7 @@ metadata:
   namespace: ${PIPELINE_NAMESPACE}
 spec:
   taskRunTemplate:
-    serviceAccountName: tekton-sa
+    serviceAccountName: ${PIPELINE_SERVICE_ACCOUNT}
   pipelineRef:
     name: ${DEPLOYMENT_NAME}-pipeline
   workspaces:
@@ -33,13 +33,12 @@ spec:
       value: "${DEPLOYMENT_NAMESPACE}"
     - name: deployment-name
       value: "${DEPLOYMENT_NAME}"
-    - name: pipeline-mode
-      value: "${PIPELINE_MODE}"
-    - name: pipeline-namespace
-      value: "${PIPELINE_NAMESPACE}"
     - name: deployment-port
       value: "${DEPLOYMENT_PORT}"
-    # Database provisioning and migration parameters
+    - name: deployment-nodeport
+      value: "${DEPLOYMENT_NODEPORT}"
+    - name: kubectl-image
+      value: "${KUBECTL_IMAGE}"
     - name: vault-address-pipeline
       value: "${VAULT_ADDRESS_PIPELINE}"
     - name: component-name
@@ -52,5 +51,25 @@ spec:
       value: "${INFRA_DB_MOUNT}"
     - name: component-mount
       value: "${COMPONENT_MOUNT}"
-    - name: migrations-path
-      value: "${MIGRATIONS_PATH}"
+    - name: properties-repo-url
+      value: "${PROPERTIES_REPO_URL}"
+    - name: properties-repo-default-branch
+      value: "${PROPERTIES_REPO_DEFAULT_BRANCH}"
+    - name: environment-name
+      value: "${ENVIRONMENT_NAME}"
+    - name: gravitee-host
+      value: "${GRAVITEE_HOST}"
+    - name: gravitee-port
+      value: "${GRAVITEE_PORT}"
+    - name: gravitee-organization
+      value: "${GRAVITEE_ORGANIZATION}"
+    - name: gravitee-environment
+      value: "${GRAVITEE_ENVIRONMENT}"
+    - name: gravitee-context-path
+      value: "${GRAVITEE_CONTEXT_PATH}"
+    - name: gravitee-backend-url
+      value: "${GRAVITEE_BACKEND_URL}"
+    - name: infra-gravitee-mount
+      value: "${INFRA_GRAVITEE_MOUNT}"
+    - name: gravitee-version
+      value: "${GRAVITEE_VERSION}"

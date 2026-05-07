@@ -1,0 +1,48 @@
+# ClusterIP services + Endpoints to route pods to host-machine containers.
+# ExternalName does not support IP addresses — use Endpoints instead.
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: vault-host
+  namespace: ${PIPELINE_NAMESPACE}
+spec:
+  type: ClusterIP
+  ports:
+    - port: ${VAULT_PORT}
+      targetPort: ${VAULT_PORT}
+      protocol: TCP
+---
+apiVersion: v1
+kind: Endpoints
+metadata:
+  name: vault-host
+  namespace: ${PIPELINE_NAMESPACE}
+subsets:
+  - addresses:
+      - ip: ${VAULT_CONTAINER_IP}
+    ports:
+      - port: ${VAULT_PORT}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: postgres-host
+  namespace: ${PIPELINE_NAMESPACE}
+spec:
+  type: ClusterIP
+  ports:
+    - port: ${POSTGRES_PORT}
+      targetPort: ${POSTGRES_PORT}
+      protocol: TCP
+---
+apiVersion: v1
+kind: Endpoints
+metadata:
+  name: postgres-host
+  namespace: ${PIPELINE_NAMESPACE}
+subsets:
+  - addresses:
+      - ip: ${POSTGRES_CONTAINER_IP}
+    ports:
+      - port: ${POSTGRES_PORT}

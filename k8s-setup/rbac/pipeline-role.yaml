@@ -1,8 +1,6 @@
-# Role: Scoped permissions for goods-price-service in tekton-pipelines namespace
-# - Can manage CI/CD resources (tasks, pipelines, PVCs, deployments) in this namespace
-# - Cannot touch shared infrastructure (SA, ClusterRole, ClusterRoleBinding)
-# - Cannot touch shared secrets (registry-credentials, gcr-key)
-# - Service-to-service isolation: each service owns its resources by naming convention
+# Role: scoped permissions for the pipeline SA inside PIPELINE_NAMESPACE.
+# Covers Tekton resources, PVCs, pods, secrets (service-specific), configmaps, services.
+# Does NOT touch shared infrastructure secrets (registry-credentials, gcr-key).
 apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
 metadata:
@@ -27,7 +25,7 @@ rules:
     verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
   - apiGroups: [""]
     resources: ["configmaps"]
-    verbs: ["get", "list", "watch"]
+    verbs: ["get", "list", "watch", "create", "update", "patch"]
   - apiGroups: [""]
     resources: ["services", "endpoints"]
     verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]

@@ -1,6 +1,6 @@
 #!/bin/bash
-# Destroy: Delete all service resources and deployment
-# Does NOT delete shared infrastructure (namespace, SA, ClusterRole, registry secret)
+# Destroy: delete all service resources and deployment.
+# Does NOT delete shared infrastructure (namespace, SA, ClusterRole, registry secret).
 #
 # Usage: ./scripts/destroy.sh
 
@@ -8,7 +8,6 @@ set -e
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
-# Source lib
 source "$SCRIPT_DIR/lib/common.sh"
 
 load_env
@@ -16,19 +15,17 @@ set_defaults
 check_prerequisites
 check_terraform
 
-PIPELINE_NAMESPACE="${PIPELINE_NAMESPACE:-tekton-pipelines}"
-DEPLOYMENT_NAME="${DEPLOYMENT_NAME:-goods-price-service}"
-
 echo ""
 echo "=========================================="
 echo "  DESTROY — Remove All Service Resources"
 echo "=========================================="
 echo ""
 echo "  Service: ${DEPLOYMENT_NAME}"
-echo "  Namespace: ${PIPELINE_NAMESPACE}"
+echo "  Pipeline namespace: ${PIPELINE_NAMESPACE}"
+echo "  Deployment namespace: ${DEPLOYMENT_NAMESPACE}"
 echo ""
 
-warn "This will delete ALL service-specific resources in namespace: ${PIPELINE_NAMESPACE}"
+warn "This will delete ALL service-specific resources in the above namespaces."
 warn "Shared infrastructure (SA, ClusterRole, registry secret) will NOT be deleted."
 echo ""
 read -p "Are you sure? (yes/no): " confirm
@@ -40,7 +37,6 @@ fi
 
 timer_start
 
-# Stage 1: Delete deployment
 stage "Delete Deployment"
 if kubectl get deployment "$DEPLOYMENT_NAME" -n "$DEPLOYMENT_NAMESPACE" &>/dev/null; then
     kubectl delete deployment "$DEPLOYMENT_NAME" -n "$DEPLOYMENT_NAMESPACE"
@@ -49,29 +45,40 @@ else
     log "Deployment not found, skipping."
 fi
 
-# Stage 2: Delete K8s resources
 stage "Delete K8s Resources"
 
 log "Deleting PipelineRuns..."
-kubectl delete pipelineruns -n "$PIPELINE_NAMESPACE" -l tekton.dev/pipeline=${DEPLOYMENT_NAME}-pipeline 2>/dev/null || true
+kubectl delete pipelineruns -n "$PIPELINE_NAMESPACE" \
+    -l tekton.dev/pipeline=${DEPLOYMENT_NAME}-pipeline 2>/dev/null || true
 
 log "Deleting TaskRuns..."
-kubectl delete taskruns -n "$PIPELINE_NAMESPACE" -l tekton.dev/pipeline=${DEPLOYMENT_NAME}-pipeline 2>/dev/null || true
+kubectl delete taskruns -n "$PIPELINE_NAMESPACE" \
+    -l tekton.dev/pipeline=${DEPLOYMENT_NAME}-pipeline 2>/dev/null || true
 
 log "Deleting Pipeline..."
 kubectl delete pipeline "${DEPLOYMENT_NAME}-pipeline" -n "$PIPELINE_NAMESPACE" 2>/dev/null || true
 
 log "Deleting Tasks..."
-kubectl delete task cleanup maven-build maven-test docker-build db-provision db-migrate deploy -n "$PIPELINE_NAMESPACE" 2>/dev/null || true
+kubectl delete task cleanup maven-build maven-test docker-build \
+    db-provision db-migrate config-apply deploy gravitee-register \
+    -n "$PIPELINE_NAMESPACE" 2>/dev/null || true
+
+log "Deleting ConfigMaps..."
+kubectl delete configmap "${DEPLOYMENT_NAME}-config" -n "$DEPLOYMENT_NAMESPACE" 2>/dev/null || true
+kubectl delete configmap deployment-template service-template -n "$PIPELINE_NAMESPACE" 2>/dev/null || true
+
+log "Deleting Service..."
+kubectl delete service "${DEPLOYMENT_NAME}" -n "$DEPLOYMENT_NAMESPACE" 2>/dev/null || true
 
 log "Deleting PVCs..."
 kubectl delete pvc "${DEPLOYMENT_NAME}-pvc" maven-cache-pvc -n "$PIPELINE_NAMESPACE" 2>/dev/null || true
 
-log "Deleting service RBAC..."
+log "Deleting RBAC..."
 kubectl delete rolebinding "${DEPLOYMENT_NAME}-binding" -n "$PIPELINE_NAMESPACE" 2>/dev/null || true
 kubectl delete role "${DEPLOYMENT_NAME}-role" -n "$PIPELINE_NAMESPACE" 2>/dev/null || true
+kubectl delete rolebinding "${DEPLOYMENT_NAME}-deployer-binding" -n "$DEPLOYMENT_NAMESPACE" 2>/dev/null || true
+kubectl delete role "${DEPLOYMENT_NAME}-deployer-role" -n "$DEPLOYMENT_NAMESPACE" 2>/dev/null || true
 
-# Stage 3: Destroy Terraform-managed secrets
 stage "Destroy Terraform Secrets"
 cd "$TERRAFORM_DIR"
 
@@ -84,7 +91,7 @@ fi
 
 echo ""
 echo "=========================================="
-echo "  ✅ DESTROY COMPLETE — $(timer_elapsed)"
+echo "  DESTROY COMPLETE — $(timer_elapsed)"
 echo "=========================================="
 echo ""
 echo "  All service resources removed."

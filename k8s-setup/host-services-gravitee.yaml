@@ -1,0 +1,24 @@
+# Gravitee API Gateway host endpoint — only applied when GRAVITEE_CONTAINER_IP is non-empty.
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: gravitee-host
+  namespace: ${PIPELINE_NAMESPACE}
+spec:
+  type: ClusterIP
+  ports:
+    - port: ${GRAVITEE_PORT}
+      targetPort: ${GRAVITEE_PORT}
+      protocol: TCP
+---
+apiVersion: v1
+kind: Endpoints
+metadata:
+  name: gravitee-host
+  namespace: ${PIPELINE_NAMESPACE}
+subsets:
+  - addresses:
+      - ip: ${GRAVITEE_CONTAINER_IP}
+    ports:
+      - port: ${GRAVITEE_PORT}

@@ -1,0 +1,31 @@
+# PipelineRun: Security scan (SAST + DAST)
+# Triggers: ${DEPLOYMENT_NAME}-security-pipeline
+apiVersion: tekton.dev/v1
+kind: PipelineRun
+metadata:
+  generateName: ${DEPLOYMENT_NAME}-security-
+  namespace: ${PIPELINE_NAMESPACE}
+spec:
+  taskRunTemplate:
+    serviceAccountName: ${PIPELINE_SERVICE_ACCOUNT}
+  pipelineRef:
+    name: ${DEPLOYMENT_NAME}-security-pipeline
+  workspaces:
+    - name: shared-workspace
+      persistentVolumeClaim:
+        claimName: ${DEPLOYMENT_NAME}-pvc
+  params:
+    - name: git-url
+      value: "${GIT_REPO_URL}"
+    - name: git-revision
+      value: "${GIT_REPO_DEFAULT_BRANCH}"
+    - name: test-goals
+      value: "test"
+    - name: fail-on-cvss
+      value: "${SAST_FAIL_ON_CVSS}"
+    - name: dast-target-url
+      value: "http://${DEPLOYMENT_NAME}.${DEPLOYMENT_NAMESPACE}.svc.cluster.local:${DEPLOYMENT_PORT}"
+    - name: dast-openapi-path
+      value: "${DAST_OPENAPI_PATH}"
+    - name: dast-fail-on-risk
+      value: "${DAST_FAIL_ON_RISK}"

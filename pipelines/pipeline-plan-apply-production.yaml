@@ -1,9 +1,11 @@
-# PipelineRun: Full CI/CD pipeline
+# PipelineRun: Production CI/CD pipeline (external database)
 # Triggers: ${DEPLOYMENT_NAME}-pipeline
+# Uses DATABASE_HOST/DATABASE_PORT for external database connectivity.
+# Falls back to POSTGRES_HOST/POSTGRES_PORT if DATABASE_HOST is not set.
 apiVersion: tekton.dev/v1
 kind: PipelineRun
 metadata:
-  generateName: ${DEPLOYMENT_NAME}-
+  generateName: ${DEPLOYMENT_NAME}-production-
   namespace: ${PIPELINE_NAMESPACE}
 spec:
   taskRunTemplate:

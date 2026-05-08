@@ -26,6 +26,14 @@ spec:
     - name: POSTGRES_PORT
       type: string
       default: "${POSTGRES_PORT}"
+    - name: DATABASE_HOST
+      type: string
+      default: ""
+      description: "External DB host. Falls back to POSTGRES_HOST if empty."
+    - name: DATABASE_PORT
+      type: string
+      default: ""
+      description: "External DB port. Falls back to POSTGRES_PORT if empty."
     - name: MAVEN_IMAGE
       type: string
       default: "${MAVEN_IMAGE}"
@@ -70,6 +78,10 @@ spec:
           value: $(params.POSTGRES_HOST)
         - name: POSTGRES_PORT
           value: $(params.POSTGRES_PORT)
+        - name: DATABASE_HOST
+          value: $(params.DATABASE_HOST)
+        - name: DATABASE_PORT
+          value: $(params.DATABASE_PORT)
       script: |
         #!/bin/bash
         set -e
@@ -77,9 +89,14 @@ spec:
         # Install jq
         apt-get update -qq && apt-get install -y -qq jq curl
 
+        # Resolve database host: prefer DATABASE_HOST if set, fall back to POSTGRES_HOST
+        DB_HOST="${DATABASE_HOST:-${POSTGRES_HOST}}"
+        DB_PORT="${DATABASE_PORT:-${POSTGRES_PORT}}"
+
         echo "🗄️ Running database migrations..."
         echo "   Component: ${COMPONENT_NAME}"
         echo "   Vault: ${VAULT_ADDRESS_PIPELINE}"
+        echo "   Database Host: ${DB_HOST}:${DB_PORT} (source: ${DATABASE_HOST:+external}${DATABASE_HOST:-local})"
 
         # Verify Vault connectivity
         echo "🔍 Verifying Vault connectivity..."
@@ -127,13 +144,13 @@ spec:
         else
             echo "Password: ****"
         fi
-        echo "JDBC URL: jdbc:postgresql://${POSTGRES_HOST}:${POSTGRES_PORT}/${DB_NAME}"
+        echo "JDBC URL: jdbc:postgresql://${DB_HOST}:${DB_PORT}/${DB_NAME}"
 
         # Run Maven Flyway migration via flyway profile
         echo "Executing: mvn flyway:migrate -Pflyway ..."
         mvn flyway:migrate -Pflyway \
-            -DDATABASE_HOST="${POSTGRES_HOST}" \
-            -DDATABASE_PORT="${POSTGRES_PORT}" \
+            -DDATABASE_HOST="${DB_HOST}" \
+            -DDATABASE_PORT="${DB_PORT}" \
             -DDATABASE_NAME="${DB_NAME}" \
             -DDATABASE_USERNAME="${DB_USER}" \
             -DDATABASE_PASSWORD="${DB_PASS}" \
@@ -170,11 +187,19 @@ spec:
           value: $(params.POSTGRES_HOST)
         - name: POSTGRES_PORT
           value: $(params.POSTGRES_PORT)
+        - name: DATABASE_HOST
+          value: $(params.DATABASE_HOST)
+        - name: DATABASE_PORT
+          value: $(params.DATABASE_PORT)
       script: |
         #!/bin/bash
         set -e
 
         apt-get update -qq && apt-get install -y -qq jq curl
+
+        # Resolve database host: prefer DATABASE_HOST if set, fall back to POSTGRES_HOST
+        DB_HOST="${DATABASE_HOST:-${POSTGRES_HOST}}"
+        DB_PORT="${DATABASE_PORT:-${POSTGRES_PORT}}"
 
         echo "🔍 Verifying migration status..."
 
@@ -208,7 +233,7 @@ spec:
         echo "   Database: ${DB_NAME}"
         echo "   User: ${DB_USER}"
         echo "   Password: ${PASS_MASKED} (${PASS_LEN} chars)"
-        echo "   JDBC URL: jdbc:postgresql://${POSTGRES_HOST}:${POSTGRES_PORT}/${DB_NAME}"
+        echo "   JDBC URL: jdbc:postgresql://${DB_HOST}:${DB_PORT}/${DB_NAME}"
 
         # Validate password is not empty
         if [ -z "${DB_PASS}" ] || [ "${DB_PASS}" = "null" ]; then
@@ -218,8 +243,8 @@ spec:
 
         # Run flyway info to verify
         mvn flyway:info -Pflyway \
-            -DDATABASE_HOST="${POSTGRES_HOST}" \
-            -DDATABASE_PORT="${POSTGRES_PORT}" \
+            -DDATABASE_HOST="${DB_HOST}" \
+            -DDATABASE_PORT="${DB_PORT}" \
             -DDATABASE_NAME="${DB_NAME}" \
             -DDATABASE_USERNAME="${DB_USER}" \
             -DDATABASE_PASSWORD="${DB_PASS}" \

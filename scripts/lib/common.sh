@@ -130,6 +130,8 @@ set_defaults() {
     COMPONENT_MOUNT="${COMPONENT_MOUNT:-local/component}"
     POSTGRES_HOST="${POSTGRES_HOST:-postgres-host}"
     POSTGRES_PORT="${POSTGRES_PORT:-5432}"
+    DATABASE_HOST="${DATABASE_HOST:-${POSTGRES_HOST}}"
+    DATABASE_PORT="${DATABASE_PORT:-${POSTGRES_PORT}}"
     MIGRATIONS_PATH="${MIGRATIONS_PATH:-db/migration}"
     COMPONENT_NAME="${COMPONENT_NAME:-${DEPLOYMENT_NAME}}"
     PROPERTIES_REPO_URL="${PROPERTIES_REPO_URL:-https://github.com/${RBAC_USER}/goods-price-comparison-properties.git}"

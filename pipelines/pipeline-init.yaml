@@ -59,6 +59,14 @@ spec:
     - name: postgres-port
       type: string
       default: "${POSTGRES_PORT}"
+    - name: database-host
+      type: string
+      default: "${DATABASE_HOST}"
+      description: "External database host. Falls back to postgres-host if empty."
+    - name: database-port
+      type: string
+      default: "${DATABASE_PORT}"
+      description: "External database port. Falls back to postgres-port if empty."
     - name: infra-db-mount
       type: string
       default: "${INFRA_DB_MOUNT}"
@@ -166,6 +174,10 @@ spec:
           value: $(params.postgres-host)
         - name: POSTGRES_PORT
           value: $(params.postgres-port)
+        - name: DATABASE_HOST
+          value: $(params.database-host)
+        - name: DATABASE_PORT
+          value: $(params.database-port)
         - name: INFRA_DB_MOUNT
           value: $(params.infra-db-mount)
         - name: COMPONENT_MOUNT
@@ -187,6 +199,10 @@ spec:
           value: $(params.postgres-host)
         - name: POSTGRES_PORT
           value: $(params.postgres-port)
+        - name: DATABASE_HOST
+          value: $(params.database-host)
+        - name: DATABASE_PORT
+          value: $(params.database-port)
         - name: COMPONENT_MOUNT
           value: $(params.component-mount)
 
@@ -218,6 +234,10 @@ spec:
           value: $(params.postgres-host)
         - name: POSTGRES_PORT
           value: $(params.postgres-port)
+        - name: DATABASE_HOST
+          value: $(params.database-host)
+        - name: DATABASE_PORT
+          value: $(params.database-port)
 
     - name: deploy
       taskRef:

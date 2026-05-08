@@ -28,6 +28,14 @@ spec:
     - name: POSTGRES_PORT
       type: string
       default: "${POSTGRES_PORT}"
+    - name: DATABASE_HOST
+      type: string
+      default: ""
+      description: "External DB host. Falls back to POSTGRES_HOST if empty."
+    - name: DATABASE_PORT
+      type: string
+      default: ""
+      description: "External DB port. Falls back to POSTGRES_PORT if empty."
   volumes:
     - name: vault-token
       secret:
@@ -64,6 +72,10 @@ spec:
           value: $(params.POSTGRES_HOST)
         - name: POSTGRES_PORT
           value: $(params.POSTGRES_PORT)
+        - name: DATABASE_HOST
+          value: $(params.DATABASE_HOST)
+        - name: DATABASE_PORT
+          value: $(params.DATABASE_PORT)
       script: |
         #!/bin/sh
         set -e
@@ -78,6 +90,8 @@ spec:
         echo "   DB User: ${DB_USER:-<NOT SET>}"
         echo "   Postgres Host: ${POSTGRES_HOST:-<NOT SET>}"
         echo "   Postgres Port: ${POSTGRES_PORT:-<NOT SET>}"
+        echo "   Database Host (external): ${DATABASE_HOST:-<NOT SET>}"
+        echo "   Database Port (external): ${DATABASE_PORT:-<NOT SET>}"
         echo "   Vault Address: ${VAULT_ADDRESS_PIPELINE:-<NOT SET>}"
         echo "   Infra Mount: ${INFRA_DB_MOUNT:-<NOT SET>}"
         echo "   Component Mount: ${COMPONENT_MOUNT:-<NOT SET>}"
@@ -102,6 +116,12 @@ spec:
         fi
         
         echo "✅ All required parameters provided"
+        echo ""
+
+        # Resolve database host: prefer DATABASE_HOST if set, fall back to POSTGRES_HOST
+        DB_HOST="${DATABASE_HOST:-${POSTGRES_HOST}}"
+        DB_PORT="${DATABASE_PORT:-${POSTGRES_PORT}}"
+        echo "   Using DB Host: ${DB_HOST}:${DB_PORT} (source: ${DATABASE_HOST:+external DATABASE_HOST}${DATABASE_HOST:-local POSTGRES_HOST})"
         echo ""
 
         # Install tools
@@ -184,7 +204,7 @@ spec:
         INFRA_USER=$(echo "$INFRA_RESPONSE" | jq -r '.data.data.POSTGRES_USER')
         INFRA_PASS=$(echo "$INFRA_RESPONSE" | jq -r '.data.data.POSTGRES_PASSWORD')
 
-        echo "Infrastructure DB: ${POSTGRES_HOST}:${POSTGRES_PORT} (user: ${INFRA_USER})"
+        echo "Infrastructure DB: ${DB_HOST}:${DB_PORT} (user: ${INFRA_USER})"
 
         # Check if component credentials exist in Vault
         echo "Checking for existing credentials in Vault..."
@@ -219,30 +239,30 @@ spec:
 
         # Create database if not exists
         echo "Checking/Creating database: ${DB_NAME}"
-        DB_EXISTS=$(PGPASSWORD="${INFRA_PASS}" psql -h "${POSTGRES_HOST}" -p "${POSTGRES_PORT}" -U "${INFRA_USER}" -d postgres -t -c "SELECT 1 FROM pg_database WHERE datname = '${DB_NAME}';" 2>/dev/null | xargs || echo "")
+        DB_EXISTS=$(PGPASSWORD="${INFRA_PASS}" psql -h "${DB_HOST}" -p "${DB_PORT}" -U "${INFRA_USER}" -d postgres -t -c "SELECT 1 FROM pg_database WHERE datname = '${DB_NAME}';" 2>/dev/null | xargs || echo "")
 
         if [ "$DB_EXISTS" = "1" ]; then
             echo "Database ${DB_NAME} already exists"
         else
-            PGPASSWORD="${INFRA_PASS}" psql -h "${POSTGRES_HOST}" -p "${POSTGRES_PORT}" -U "${INFRA_USER}" -d postgres -c "CREATE DATABASE \"${DB_NAME}\";"
+            PGPASSWORD="${INFRA_PASS}" psql -h "${DB_HOST}" -p "${DB_PORT}" -U "${INFRA_USER}" -d postgres -c "CREATE DATABASE \"${DB_NAME}\";"
             echo "Created database: ${DB_NAME}"
         fi
 
         # Create or update user
-        USER_EXISTS=$(PGPASSWORD="${INFRA_PASS}" psql -h "${POSTGRES_HOST}" -p "${POSTGRES_PORT}" -U "${INFRA_USER}" -d postgres -t -c "SELECT 1 FROM pg_roles WHERE rolname = '${DB_USER}';" 2>/dev/null | xargs || echo "")
+        USER_EXISTS=$(PGPASSWORD="${INFRA_PASS}" psql -h "${DB_HOST}" -p "${DB_PORT}" -U "${INFRA_USER}" -d postgres -t -c "SELECT 1 FROM pg_roles WHERE rolname = '${DB_USER}';" 2>/dev/null | xargs || echo "")
 
         if [ "$USER_EXISTS" = "1" ]; then
             echo "User ${DB_USER} exists, updating password..."
-            PGPASSWORD="${INFRA_PASS}" psql -h "${POSTGRES_HOST}" -p "${POSTGRES_PORT}" -U "${INFRA_USER}" -d postgres -c "ALTER USER \"${DB_USER}\" WITH PASSWORD '${DB_PASSWORD}';"
+            PGPASSWORD="${INFRA_PASS}" psql -h "${DB_HOST}" -p "${DB_PORT}" -U "${INFRA_USER}" -d postgres -c "ALTER USER \"${DB_USER}\" WITH PASSWORD '${DB_PASSWORD}';"
         else
             echo "Creating user: ${DB_USER}"
-            PGPASSWORD="${INFRA_PASS}" psql -h "${POSTGRES_HOST}" -p "${POSTGRES_PORT}" -U "${INFRA_USER}" -d postgres -c "CREATE USER \"${DB_USER}\" WITH PASSWORD '${DB_PASSWORD}';"
+            PGPASSWORD="${INFRA_PASS}" psql -h "${DB_HOST}" -p "${DB_PORT}" -U "${INFRA_USER}" -d postgres -c "CREATE USER \"${DB_USER}\" WITH PASSWORD '${DB_PASSWORD}';"
         fi
 
         # Grant privileges
         echo "Granting privileges..."
-        PGPASSWORD="${INFRA_PASS}" psql -h "${POSTGRES_HOST}" -p "${POSTGRES_PORT}" -U "${INFRA_USER}" -d postgres -c "GRANT ALL PRIVILEGES ON DATABASE \"${DB_NAME}\" TO \"${DB_USER}\";"
-        PGPASSWORD="${INFRA_PASS}" psql -h "${POSTGRES_HOST}" -p "${POSTGRES_PORT}" -U "${INFRA_USER}" -d postgres -c "ALTER DATABASE \"${DB_NAME}\" OWNER TO \"${DB_USER}\";"
+        PGPASSWORD="${INFRA_PASS}" psql -h "${DB_HOST}" -p "${DB_PORT}" -U "${INFRA_USER}" -d postgres -c "GRANT ALL PRIVILEGES ON DATABASE \"${DB_NAME}\" TO \"${DB_USER}\";"
+        PGPASSWORD="${INFRA_PASS}" psql -h "${DB_HOST}" -p "${DB_PORT}" -U "${INFRA_USER}" -d postgres -c "ALTER DATABASE \"${DB_NAME}\" OWNER TO \"${DB_USER}\";"
 
         # Push to Vault
         echo "Pushing credentials to Vault: ${COMPONENT_MOUNT}/${COMPONENT_NAME}"

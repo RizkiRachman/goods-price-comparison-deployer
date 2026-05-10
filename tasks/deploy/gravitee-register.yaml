@@ -77,6 +77,36 @@ spec:
         secretName: vault-token
         optional: true
   steps:
+    - name: detect-backend
+      image: bitnami/kubectl:latest
+      env:
+        - name: GRAVITEE_BACKEND_URL
+          value: $(params.GRAVITEE_BACKEND_URL)
+        - name: DEPLOYMENT_NAME
+          value: $(params.DEPLOYMENT_NAME)
+        - name: DEPLOYMENT_NAMESPACE
+          value: $(params.DEPLOYMENT_NAMESPACE)
+      script: |
+        #!/bin/sh
+        set -e
+        if [ -n "${GRAVITEE_BACKEND_URL}" ]; then
+          echo "Backend URL provided: ${GRAVITEE_BACKEND_URL}"
+          echo "${GRAVITEE_BACKEND_URL}" > /workspace/source/.gravitee-backend
+          exit 0
+        fi
+        echo "GRAVITEE_BACKEND_URL not set — detecting from cluster..."
+        NODE_IP=$(kubectl get node \
+          -o jsonpath='{.items[0].status.addresses[?(@.type=="InternalIP")].address}' 2>/dev/null || true)
+        NODEPORT=$(kubectl get svc "${DEPLOYMENT_NAME}" -n "${DEPLOYMENT_NAMESPACE}" \
+          -o jsonpath='{.spec.ports[0].nodePort}' 2>/dev/null || true)
+        if [ -z "${NODE_IP}" ] || [ -z "${NODEPORT}" ]; then
+          echo "❌ Could not detect k3d node IP (${NODE_IP}) or NodePort (${NODEPORT})"
+          exit 1
+        fi
+        DETECTED="http://${NODE_IP}:${NODEPORT}"
+        echo "Detected backend: ${DETECTED}"
+        echo "${DETECTED}" > /workspace/source/.gravitee-backend
+
     - name: gravitee-register
       image: alpine:3.19
       volumeMounts:
@@ -209,7 +239,10 @@ spec:
         echo ""
         echo "⚙️  [5/8] Resolving API config..."
         if [ -z "${GRAVITEE_BACKEND_URL}" ]; then
-          echo "❌ GRAVITEE_BACKEND_URL is not set."
+          GRAVITEE_BACKEND_URL=$(cat /workspace/source/.gravitee-backend 2>/dev/null || true)
+        fi
+        if [ -z "${GRAVITEE_BACKEND_URL}" ]; then
+          echo "❌ GRAVITEE_BACKEND_URL is not set and auto-detection failed."
           exit 1
         fi
         BACKEND="${GRAVITEE_BACKEND_URL}"

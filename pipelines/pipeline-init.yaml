@@ -10,6 +10,10 @@ spec:
   workspaces:
     - name: shared-workspace
   params:
+    - name: pipeline-mode
+      type: string
+      default: "local"
+      description: "Pipeline mode: 'local' (build image, push to local registry) or 'cloud' (skip build, use GHCR)"
     - name: git-url
       type: string
       default: "${GIT_REPO_URL}"
@@ -24,10 +28,13 @@ spec:
       default: "${IMAGE_TAG}"
     - name: registry-host
       type: string
-      default: "${REGISTRY_CLUSTER_HOST}"
+      default: "${REGISTRY_CLUSTER_HOST:-k3d-dev-infra-registry}"
     - name: registry-port
       type: string
-      default: "${REGISTRY_CLUSTER_PORT}"
+      default: "${REGISTRY_CLUSTER_PORT:-5000}"
+    - name: ghcr-owner
+      type: string
+      default: "${GHCR_OWNER}"
     - name: test-goals
       type: string
       default: "test"
@@ -148,6 +155,10 @@ spec:
           value: $(params.test-goals)
 
     - name: build-image
+      when:
+        - input: $(params.pipeline-mode)
+          operator: in
+          values: ["local"]
       taskRef:
         name: docker-build
       runAfter: [test]
@@ -247,8 +258,12 @@ spec:
         - name: source
           workspace: shared-workspace
       params:
-        - name: IMAGE
+        - name: PIPELINE_MODE
+          value: $(params.pipeline-mode)
+        - name: IMAGE_LOCAL
           value: "$(params.registry-host):$(params.registry-port)/$(params.image-name):$(params.image-tag)"
+        - name: IMAGE_GHCR
+          value: "ghcr.io/$(params.ghcr-owner)/$(params.image-name):$(params.image-tag)"
         - name: IMAGE_NAME
           value: $(params.image-name)
         - name: NAMESPACE

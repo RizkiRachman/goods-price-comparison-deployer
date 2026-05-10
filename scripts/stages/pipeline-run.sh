@@ -13,7 +13,11 @@ stage_pipeline_run() {
 
     timer_start
 
-    stage "Pipeline Run (clone → build → test → image → db → config → deploy → gravitee)"
+    if [ "$PIPELINE_MODE" = "cloud" ]; then
+        stage "Pipeline Run (clone → build → test → db → config → deploy → gravitee) [cloud]"
+    else
+        stage "Pipeline Run (clone → build → test → image → db → config → deploy → gravitee) [local]"
+    fi
 
     step "Pipeline: ${DEPLOYMENT_NAME}-pipeline"
     step "Namespace: ${PIPELINE_NAMESPACE}"

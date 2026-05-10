@@ -100,9 +100,7 @@ set_defaults() {
     KUBECTL_IMAGE="${KUBECTL_IMAGE:-bitnami/kubectl:latest}"
     MAVEN_IMAGE="${MAVEN_IMAGE:-maven:3.9-eclipse-temurin-17}"
     KANIKO_IMAGE="${KANIKO_IMAGE:-gcr.io/kaniko-project/executor:latest}"
-    REGISTRY_CLUSTER_HOST="${REGISTRY_CLUSTER_HOST:-k3d-dev-infra-registry}"
-    REGISTRY_CLUSTER_PORT="${REGISTRY_CLUSTER_PORT:-5000}"
-    REGISTRY_PORT="${REGISTRY_PORT:-5002}"
+    GHCR_OWNER="${GHCR_OWNER:-rizkirachnan}"
     RBAC_USER="${RBAC_USER:-dev-infra-admin}"
     PIPELINE_SERVICE_ACCOUNT="${PIPELINE_SERVICE_ACCOUNT:-dev-infra}"
     IMAGE_NAME="${IMAGE_NAME:-goods-price-comparison-service}"
@@ -248,10 +246,14 @@ health_check_infra() {
         warn "  Vault (${_vault_addr}): unreachable (HTTP ${_vault_http_code:-000})"; FAIL=$((FAIL+1))
     fi
 
-    if curl -sf "http://localhost:${REGISTRY_PORT:-5002}/v2/" &>/dev/null; then
-        log "  Registry (localhost:${REGISTRY_PORT:-5002}): reachable"; PASS=$((PASS+1))
+    if [ "${PIPELINE_MODE:-local}" = "local" ]; then
+        if curl -sf "http://localhost:${REGISTRY_PORT:-5002}/v2/" &>/dev/null; then
+            log "  Registry (localhost:${REGISTRY_PORT:-5002}): reachable"; PASS=$((PASS+1))
+        else
+            warn "  Registry (localhost:${REGISTRY_PORT:-5002}): unreachable"; FAIL=$((FAIL+1))
+        fi
     else
-        warn "  Registry (localhost:${REGISTRY_PORT:-5002}): unreachable"; FAIL=$((FAIL+1))
+        log "  Registry: skipped (cloud mode — using GHCR)"; PASS=$((PASS+1))
     fi
 
     echo ""

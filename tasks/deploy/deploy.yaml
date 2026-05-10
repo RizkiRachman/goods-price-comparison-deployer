@@ -8,9 +8,18 @@ spec:
   workspaces:
     - name: source
   params:
-    - name: IMAGE
+    - name: PIPELINE_MODE
       type: string
-      description: "Full image reference to deploy"
+      default: "local"
+      description: "Selects image source: 'local' uses IMAGE_LOCAL, 'cloud' uses IMAGE_GHCR"
+    - name: IMAGE_LOCAL
+      type: string
+      default: ""
+      description: "Image reference for local mode (local registry)"
+    - name: IMAGE_GHCR
+      type: string
+      default: ""
+      description: "Image reference for cloud mode (GHCR)"
     - name: IMAGE_NAME
       type: string
       description: "Container image name (derived from image URI)"
@@ -47,8 +56,12 @@ spec:
           mountPath: /var/run/templates/service
           readOnly: true
       env:
-        - name: IMAGE
-          value: $(params.IMAGE)
+        - name: PIPELINE_MODE
+          value: $(params.PIPELINE_MODE)
+        - name: IMAGE_LOCAL
+          value: $(params.IMAGE_LOCAL)
+        - name: IMAGE_GHCR
+          value: $(params.IMAGE_GHCR)
         - name: IMAGE_NAME
           value: $(params.IMAGE_NAME)
         - name: NAMESPACE
@@ -63,14 +76,17 @@ spec:
         #!/bin/bash
         set -e
 
+        # Select image based on pipeline mode
+        if [ "$PIPELINE_MODE" = "cloud" ]; then
+          IMAGE="$IMAGE_GHCR"
+          echo "☁️ Cloud mode: deploying from GHCR"
+        else
+          IMAGE="$IMAGE_LOCAL"
+          echo "🏗️ Local mode: deploying from local registry"
+        fi
         echo "🚀 Deploying ${IMAGE} to ${NAMESPACE}"
 
         cd $(workspaces.source.path)
-
-        # Extract registry host from image
-        REGISTRY_HOST=$(echo "${IMAGE}" | cut -d'/' -f1)
-
-        echo "Configuring insecure registry: ${REGISTRY_HOST}"
 
         # Delete existing deployment to avoid stale containers from merging
         if kubectl get deployment "${DEPLOYMENT_NAME}" -n "${NAMESPACE}" &>/dev/null; then

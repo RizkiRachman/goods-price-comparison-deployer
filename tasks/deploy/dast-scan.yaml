@@ -90,16 +90,7 @@ spec:
         echo ""
         echo "⚙️  Evaluating results..."
 
-        HIGH_COUNT=$(python3 -c "
-import json, sys
-try:
-    data = json.load(open('${REPORT_DIR}/zap-report.json'))
-    alerts = data.get('site', [{}])[0].get('alerts', [])
-    count = sum(1 for a in alerts if int(a.get('riskcode', 0)) >= ${FAIL_ON_RISK})
-    print(count)
-except Exception as e:
-    print(0)
-" 2>/dev/null || echo "0")
+        HIGH_COUNT=$(python3 -c "import json; data = json.load(open('${REPORT_DIR}/zap-report.json')); alerts = data.get('site', [{}])[0].get('alerts', []); count = sum(1 for a in alerts if int(a.get('riskcode', 0)) >= ${FAIL_ON_RISK}); print(count)" 2>/dev/null || echo "0")
 
         echo "  Report: ${REPORT_DIR}/zap-report.html"
         echo "  Alerts at risk >= ${FAIL_ON_RISK}: ${HIGH_COUNT}"

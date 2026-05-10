@@ -160,25 +160,31 @@ spec:
         export DATABASE_PORT="${DATABASE_PORT:-${POSTGRES_PORT}}"
         ENVSUBST_VARS="${ENVSUBST_VARS} \${DATABASE_HOST} \${DATABASE_PORT}"
 
-        # Read LLM credentials from component Vault path (same secret as DB credentials).
-        # Convention: Vault key=<PROVIDER>_API_KEY → env var=LLM_<PROVIDER>_API_KEY
-        # To add a new provider, append its Vault key name to the list below.
+        # Read LLM provider first, then resolve provider-specific API key.
+        # Vault convention:
+        #   llm_provider=<provider>
+        #   llm_<provider>_api_key=<provider api key>
         echo "📋 Reading LLM credentials from Vault..."
-        LLM_KEYS_FOUND=0
-        for VAULT_KEY in GEMINI_API_KEY GROQ_API_KEY OPENAPI_API_KEY ANTHROPIC_API_KEY; do
-            KEY_VALUE=$(echo "$VAULT_RESPONSE" | jq -r ".data.data.${VAULT_KEY} // empty")
-            if [ -n "$KEY_VALUE" ] && [ "$KEY_VALUE" != "null" ]; then
-                ENV_VAR="LLM_${VAULT_KEY}"
-                export "${ENV_VAR}"="${KEY_VALUE}"
-                ENVSUBST_VARS="${ENVSUBST_VARS} \${${ENV_VAR}}"
-                KEY_LEN=${#KEY_VALUE}
-                echo "   ${ENV_VAR}=**** (${KEY_LEN} chars)"
-                LLM_KEYS_FOUND=$((LLM_KEYS_FOUND + 1))
+        LLM_PROVIDER=$(echo "$VAULT_RESPONSE" | jq -r '.data.data.llm_provider // empty')
+        if [ -n "$LLM_PROVIDER" ] && [ "$LLM_PROVIDER" != "null" ]; then
+            LLM_PROVIDER_UPPER=$(echo "$LLM_PROVIDER" | tr '[:lower:]' '[:upper:]')
+            LLM_PROVIDER_KEY="llm_${LLM_PROVIDER}_api_key"
+            LLM_API_KEY=$(echo "$VAULT_RESPONSE" | jq -r --arg k "$LLM_PROVIDER_KEY" '.data.data[$k] // empty')
+
+            export LLM_PROVIDER="$LLM_PROVIDER"
+            export "LLM_${LLM_PROVIDER_UPPER}_API_KEY"="$LLM_API_KEY"
+            ENVSUBST_VARS="${ENVSUBST_VARS} \${LLM_PROVIDER} \${LLM_${LLM_PROVIDER_UPPER}_API_KEY}"
+
+            if [ -n "$LLM_API_KEY" ] && [ "$LLM_API_KEY" != "null" ]; then
+                KEY_LEN=${#LLM_API_KEY}
+                echo "   LLM_PROVIDER=${LLM_PROVIDER}"
+                echo "   LLM_${LLM_PROVIDER_UPPER}_API_KEY=**** (${KEY_LEN} chars)"
             else
-                echo "   ⚠️ ${VAULT_KEY} not set in Vault at ${COMPONENT_MOUNT}/${COMPONENT_NAME} (optional)"
+                echo "   ⚠️ LLM provider is '${LLM_PROVIDER}' but Vault key '${LLM_PROVIDER_KEY}' is missing/empty"
             fi
-        done
-        echo "   ${LLM_KEYS_FOUND} LLM key(s) loaded"
+        else
+            echo "   ⚠️ llm_provider not set in Vault at ${COMPONENT_MOUNT}/${COMPONENT_NAME} (optional)"
+        fi
 
         # Clone properties repository
         PROPERTIES_DIR="/tmp/properties-repo"

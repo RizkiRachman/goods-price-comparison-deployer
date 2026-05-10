@@ -1,6 +1,49 @@
-# Goods Price Comparison — Deployer
+<a id="readme-top"></a>
+
+[![Contributors][contributors-shield]][contributors-url]
+[![Forks][forks-shield]][forks-url]
+[![Stargazers][stars-shield]][stars-url]
+[![Issues][issues-shield]][issues-url]
+
+<br />
+<div align="center">
+  <h3 align="center">Goods Price Comparison — Deployer</h3>
+  <p align="center">
+    Service-specific CI/CD pipeline definitions for building and deploying the goods-price-comparison-service
+    <br />
+    <a href="https://github.com/RizkiRachman/goods-price-comparison-service"><strong>Explore the service repo »</strong></a>
+    <br />
+    <br />
+    <a href="#getting-started">Get Started</a>
+    &middot;
+    <a href="https://github.com/RizkiRachman/dev-infrastructure">Dev Infrastructure</a>
+  </p>
+</div>
+
+<details>
+  <summary>Table of Contents</summary>
+  <ol>
+    <li><a href="#about-the-project">About The Project</a></li>
+    <li><a href="#architecture">Architecture</a></li>
+    <li><a href="#built-with">Built With</a></li>
+    <li><a href="#getting-started">Getting Started</a></li>
+    <li><a href="#usage">Usage</a></li>
+    <li><a href="#pipeline-flow">Pipeline Flow</a></li>
+    <li><a href="#scripts">Scripts</a></li>
+    <li><a href="#environment-variables">Environment Variables</a></li>
+    <li><a href="#directory-structure">Directory Structure</a></li>
+    <li><a href="#contributing">Contributing</a></li>
+    <li><a href="#contact">Contact</a></li>
+  </ol>
+</details>
+
+## About The Project
 
 Service-specific CI/CD pipeline definitions for building and deploying the [goods-price-comparison-service](https://github.com/RizkiRachman/goods-price-comparison-service). Integrates with the shared [dev-infrastructure](https://github.com/RizkiRachman/dev-infrastructure) Tekton server.
+
+All builds run **in-cluster via Tekton** — no local Maven or Docker required.
+
+<p align="right">(<a href="#readme-top">back to top</a>)</p>
 
 ## Architecture
 
@@ -8,123 +51,16 @@ Service-specific CI/CD pipeline definitions for building and deploying the [good
 dev-infrastructure (shared)                    this repo (deployer)
 ─────────────────────────                      ──────────────────────────────────
 k3d cluster + registry                         terraform/          Vault → K8s secrets
-Tekton Pipelines/Dashboard                     tasks/              Tekton task definitions
-Namespace, SA, ClusterRole, registry secret    pipelines/          Pipeline + PipelineRun template
-Vault + PostgreSQL (on host)                   pvc/                Workspace + Maven cache
-                                               k8s-setup/          Scoped RBAC
-                                               scripts/            init / apply / plan / destroy
+Tekton Pipelines/Dashboard                     tasks/              Tekton task definitions (categorized)
+Namespace, SA, ClusterRole, registry secret    pipelines/          Pipeline + PipelineRun templates
+Vault + PostgreSQL (on host)                   k8s-setup/          Scoped RBAC + Storage
+Gravitee APIM (on host)                        scripts/            init / apply / security / destroy
+                                               templates/          K8s deployment + service templates
 ```
 
-The shared infrastructure is managed by `dev-infrastructure`. This deployer registers service-specific resources (tasks, pipeline, PVCs, secrets) into the shared `tekton-pipelines` namespace. All builds run **in-cluster via Tekton** — no local Maven or Docker required.
+The shared infrastructure is managed by `dev-infrastructure`. This deployer registers service-specific resources (tasks, pipeline, PVCs, secrets) into the shared `tekton-pipelines` namespace.
 
-## Quick Start
-
-```bash
-# 1. Start dev-infrastructure
-cd ../dev-infrastructure && ./scripts/init.sh
-
-# 2. Configure this repo
-cp .env.template .env            # Edit .env if needed (defaults work for local dev)
-cd terraform
-cp terraform.tfvars.example terraform.tfvars  # Set vault_token
-cd ..
-
-# 3. Create host-proxy services (Vault + PostgreSQL access from pods)
-#    Replace 192.168.x.x with your host IP (from ifconfig)
-HOST_IP=192.168.18.195
-
-kubectl apply -n tekton-pipelines -f - <<EOF
-apiVersion: v1
-kind: Service
-metadata: {name: vault-host}
-spec: {clusterIP: None, ports: [{port: 8201, targetPort: 8201}]}
-EOF
-
-printf '{"apiVersion":"v1","kind":"Endpoints","metadata":{"name":"vault-host"},"subsets":[{"addresses":[{"ip":"%s"}],"ports":[{"port":8201}]}]}' \
-  "$HOST_IP" | kubectl apply -n tekton-pipelines -f -
-
-kubectl apply -n tekton-pipelines -f - <<EOF
-apiVersion: v1
-kind: Service
-metadata: {name: postgres-host}
-spec: {clusterIP: None, ports: [{port: 5432, targetPort: 5432}]}
-EOF
-
-printf '{"apiVersion":"v1","kind":"Endpoints","metadata":{"name":"postgres-host"},"subsets":[{"addresses":[{"ip":"%s"}],"ports":[{"port":5432}]}]}' \
-  "$HOST_IP" | kubectl apply -n tekton-pipelines -f -
-
-# 4. Initialize (one-time, or when task/pipeline definitions change)
-./scripts/init.sh
-
-# 5. Run the pipeline
-./scripts/apply.sh    # Full: clone → build → test → image → db-provision → db-migrate → deploy
-./scripts/plan.sh     # Partial: clone → build → test only
-```
-
-## Pipeline Flow
-
-```
-cleanup → clone → build → test → build-image → db-provision → db-migrate → deploy
-                                     ────────────   ────────────
-                                     (full mode)    (full mode)
-```
-
-| Mode | Tasks executed | Skipped |
-|------|---------------|---------|
-| `full` (apply) | all tasks | — |
-| `plan` (plan) | cleanup → clone → build → test | build-image, db-provision, db-migrate, deploy |
-
-Tasks are skipped via Tekton `when` expressions — no separate pipeline definition needed.
-
-## Scripts
-
-| Script | What it does | When to use |
-|--------|-------------|-------------|
-| `init.sh` | Health check → Terraform apply → K8s resources (RBAC, PVCs, tasks, pipeline) | Once, or when YAML definitions change |
-| `apply.sh` | Full pipeline run | Every code change |
-| `plan.sh` | Build + test only | Verify code compiles and tests pass |
-| `destroy.sh` | Delete all service resources | Full teardown |
-| `clean.sh` | Delete PipelineRuns/TaskRuns | Free disk or clean failed runs |
-
-### clean.sh options
-
-```bash
-./scripts/clean.sh                  # Interactive: choose what to clean
-./scripts/clean.sh --failed         # Delete only failed runs
-./scripts/clean.sh --all            # Delete all runs
-./scripts/clean.sh --older-than 7   # Delete runs older than 7 days
-./scripts/clean.sh --all --yes      # Skip confirmation
-```
-
-## Host Connectivity
-
-Vault and PostgreSQL run on the **host machine** (outside the k3d cluster). Pipeline pods need `vault-host` and `postgres-host` Services with manual Endpoints to reach them.
-
-> **Important**: `host.k3d.internal` does NOT resolve from within pods. Use the Service+Endpoint approach instead.
-
-The Services must be in the **same namespace as Tekton pods** (`tekton-pipelines`), otherwise DNS won't resolve.
-
-```bash
-# Verify connectivity from inside the cluster
-kubectl run -n tekton-pipelines test-vault --image=curlimages/curl -it --rm -- \
-  curl -s http://vault-host:8201/v1/sys/health
-```
-
-## Database Provisioning
-
-The `db-provision` task automatically:
-1. Verifies Vault connectivity and token validity
-2. Reads infrastructure DB credentials from Vault (`local/infrastructure/data/database`)
-3. Checks if component credentials already exist (skips if valid, re-provisions if password is empty)
-4. Generates a random 32-char password (Alpine-compatible)
-5. Creates/updates the database and user in PostgreSQL
-6. Pushes credentials to Vault (`local/component/<service-name>`)
-
-Passwords are masked in logs: `6e****ae (32 chars)`.
-
-## Credential Management
-
-Credentials flow **Vault → Terraform → K8s Secrets**. No `kubectl create secret` anywhere.
+### Credential Flow
 
 ```
 Vault (local/infrastructure/github)  ──►  Terraform apply  ──►  K8s Secrets
@@ -136,7 +72,182 @@ Vault (local/infrastructure/github)  ──►  Terraform apply  ──►  K8s 
 - **Terraform** reads Vault and creates K8s secrets declaratively
 - **Tekton tasks** reference K8s secrets (no changes to task definitions)
 
-See [terraform/README.md](terraform/README.md) for details.
+### Database Provisioning
+
+The `db-provision` task automatically:
+1. Verifies Vault connectivity and token validity
+2. Reads infrastructure DB credentials from Vault (`local/infrastructure/data/database`)
+3. Checks if component credentials already exist (skips if valid, re-provisions if password is empty)
+4. Generates a random 32-char password (Alpine-compatible)
+5. Creates/updates the database and user in PostgreSQL
+6. Pushes credentials to Vault (`local/component/<service-name>`)
+
+Passwords are masked in logs: `6e****ae (32 chars)`.
+
+### RBAC Scoping
+
+The `k8s-setup/rbac/` directory defines scoped `Role` + `RoleBinding` resources:
+
+| Allowed | Blocked (shared infra) |
+|---------|----------------------|
+| Tasks, TaskRuns, Pipelines, PipelineRuns | ServiceAccount `tekton-sa` |
+| PVCs (workspace, maven-cache) | ClusterRole `tekton-sa-role` |
+| Secrets (`github-maven-credentials`, `maven-settings-secret`) | ClusterRoleBinding `tekton-sa-binding` |
+| Pods, Pods/log (read-only) | Secret `registry-credentials` |
+| Deployments, ReplicaSets | |
+| ConfigMaps, Services, Endpoints | |
+
+### Host Connectivity
+
+Vault, PostgreSQL, and Gravitee APIM run on the **host machine** (outside the k3d cluster). Pipeline pods need `vault-host`, `postgres-host`, and `gravitee-host` Services with manual Endpoints to reach them.
+
+> **Important**: `host.k3d.internal` does NOT resolve from within pods. Use the Service+Endpoint approach instead.
+
+The Services must be in the **same namespace as Tekton pods** (`tekton-pipelines`), otherwise DNS won't resolve.
+
+```bash
+# Verify connectivity from inside the cluster
+kubectl run -n tekton-pipelines test-vault --image=curlimages/curl -it --rm -- \
+  curl -s http://vault-host:8201/v1/sys/health
+```
+
+<p align="right">(<a href="#readme-top">back to top</a>)</p>
+
+## Built With
+
+* [![Tekton](https://img.shields.io/badge/Tekton-FF6600?style=for-the-badge&logo=tekton&logoColor=white)](https://tekton.dev/)
+* [![Kubernetes](https://img.shields.io/badge/Kubernetes-326CE5?style=for-the-badge&logo=kubernetes&logoColor=white)](https://kubernetes.io/)
+* [![Terraform](https://img.shields.io/badge/Terraform-844FBA?style=for-the-badge&logo=terraform&logoColor=white)](https://www.terraform.io/)
+* [![Vault](https://img.shields.io/badge/Vault-FFDD57?style=for-the-badge&logo=vault&logoColor=black)](https://www.vaultproject.io/)
+* [![Docker](https://img.shields.io/badge/Docker-2496ED?style=for-the-badge&logo=docker&logoColor=white)](https://www.docker.com/)
+* [![PostgreSQL](https://img.shields.io/badge/PostgreSQL-4169E1?style=for-the-badge&logo=postgresql&logoColor=white)](https://www.postgresql.org/)
+* [![Flyway](https://img.shields.io/badge/Flyway-CC0200?style=for-the-badge&logo=flyway&logoColor=white)](https://flywaydb.org/)
+* [![Gravitee](https://img.shields.io/badge/Gravitee-2A9D8F?style=for-the-badge&logo=gravitee&logoColor=white)](https://www.gravitee.io/)
+
+<p align="right">(<a href="#readme-top">back to top</a>)</p>
+
+## Getting Started
+
+### Prerequisites
+
+- [dev-infrastructure](https://github.com/RizkiRachman/dev-infrastructure) running with k3d cluster, Tekton, and Vault
+- `kubectl` configured to use the dev-infra cluster context
+- `terraform` >= 1.0 installed
+- Vault seeded with GitHub credentials at `local/infrastructure/github`
+- Vault seeded with database credentials at `local/infrastructure/database`
+- Vault seeded with Gravitee credentials at `local/infrastructure/gravitee` (keys: `username`, `password`)
+- `vault-host`, `postgres-host`, and `gravitee-host` Services+Endpoints in `tekton-pipelines` namespace
+
+### Installation
+
+1. Start dev-infrastructure:
+   ```bash
+   cd ../dev-infrastructure && ./scripts/init.sh
+   ```
+
+2. Configure this repo:
+   ```bash
+   cp .env.template .env
+   cd terraform
+   cp terraform.tfvars.example terraform.tfvars  # Set vault_token
+   cd ..
+   ```
+
+3. Create host-proxy services (Vault + PostgreSQL + Gravitee access from pods). Replace `192.168.x.x` with your host IP:
+   ```bash
+   HOST_IP=192.168.18.195
+
+   kubectl apply -n tekton-pipelines -f - <<EOF
+   apiVersion: v1
+   kind: Service
+   metadata: {name: vault-host}
+   spec: {clusterIP: None, ports: [{port: 8201, targetPort: 8201}]}
+   EOF
+
+   printf '{"apiVersion":"v1","kind":"Endpoints","metadata":{"name":"vault-host"},"subsets":[{"addresses":[{"ip":"%s"}],"ports":[{"port":8201}]}]}' \
+     "$HOST_IP" | kubectl apply -n tekton-pipelines -f -
+
+   kubectl apply -n tekton-pipelines -f - <<EOF
+   apiVersion: v1
+   kind: Service
+   metadata: {name: postgres-host}
+   spec: {clusterIP: None, ports: [{port: 5432, targetPort: 5432}]}
+   EOF
+
+   printf '{"apiVersion":"v1","kind":"Endpoints","metadata":{"name":"postgres-host"},"subsets":[{"addresses":[{"ip":"%s"}],"ports":[{"port":5432}]}]}' \
+     "$HOST_IP" | kubectl apply -n tekton-pipelines -f -
+
+   kubectl apply -n tekton-pipelines -f - <<EOF
+   apiVersion: v1
+   kind: Service
+   metadata: {name: gravitee-host}
+   spec: {clusterIP: None, ports: [{port: 8083, targetPort: 8083}]}
+   EOF
+
+   printf '{"apiVersion":"v1","kind":"Endpoints","metadata":{"name":"gravitee-host"},"subsets":[{"addresses":[{"ip":"%s"}],"ports":[{"port":8083}]}]}' \
+     "$HOST_IP" | kubectl apply -n tekton-pipelines -f -
+   ```
+
+4. Initialize (one-time, or when task/pipeline definitions change):
+   ```bash
+   ./scripts/init.sh
+   ```
+
+<p align="right">(<a href="#readme-top">back to top</a>)</p>
+
+## Usage
+
+### Run the pipeline
+
+```bash
+# Full: clone → build → test → image → db-provision → db-migrate → deploy → gravitee-register
+./scripts/apply.sh
+
+# With external database (production)
+DATABASE_HOST=my-db.example.com DATABASE_PORT=5432 ./scripts/apply-production.sh
+
+# Security scan: SAST + DAST analysis
+./scripts/security.sh
+```
+
+### Pipeline Flow
+
+```
+cleanup → clone → build → test → build-image → db-provision → db-migrate → deploy → gravitee-register
+                                     ────────────   ────────────                     ──────────────────
+                                     (full mode)    (full mode)                     (full mode)
+```
+
+| Mode | Tasks executed | Skipped |
+|------|---------------|---------|
+| `full` (apply) | all tasks | — |
+| `security` | cleanup → clone → build → test → sast-scan → build-image → deploy → dast-scan | db-provision, db-migrate, gravitee-register |
+| `production` | all tasks (same as full) | — (uses external database via DATABASE_HOST) |
+
+Tasks are skipped via Tekton `when` expressions — no separate pipeline definition needed.
+
+### Scripts
+
+| Script | What it does | When to use |
+|--------|-------------|-------------|
+| `init.sh` | Health check → Terraform apply → K8s resources (RBAC, PVCs, tasks, pipeline) | Once, or when YAML definitions change |
+| `apply.sh` | Full pipeline run (local dev database) | Every code change |
+| `apply-production.sh` | Full pipeline run (external database via DATABASE_HOST) | Deploying with external/managed DB |
+| `destroy.sh` | Delete all service resources | Full teardown |
+| `clean.sh` | Delete PipelineRuns/TaskRuns | Free disk or clean failed runs |
+| `security.sh` | Security scan: SAST + DAST analysis | Security validation |
+
+#### clean.sh options
+
+```bash
+./scripts/clean.sh                  # Interactive: choose what to clean
+./scripts/clean.sh --failed         # Delete only failed runs
+./scripts/clean.sh --all            # Delete all runs
+./scripts/clean.sh --older-than 7   # Delete runs older than 7 days
+./scripts/clean.sh --all --yes      # Skip confirmation
+```
+
+<p align="right">(<a href="#readme-top">back to top</a>)</p>
 
 ## Environment Variables
 
@@ -163,73 +274,93 @@ All pipeline/task defaults come from `.env`. No hardcoded values in YAML — eve
 | `COMPONENT_MOUNT` | Vault path for component credentials | `local/component` |
 | `POSTGRES_HOST` | PostgreSQL host (in-cluster DNS) | `postgres-host` |
 | `POSTGRES_PORT` | PostgreSQL port | `5432` |
+| `DATABASE_HOST` | External database host (production). Falls back to POSTGRES_HOST | `(POSTGRES_HOST)` |
+| `DATABASE_PORT` | External database port (production). Falls back to POSTGRES_PORT | `(POSTGRES_PORT)` |
 | `MIGRATIONS_PATH` | Flyway migrations directory | `db/migration` |
 | `COMPONENT_NAME` | Component name for Vault path | defaults to `DEPLOYMENT_NAME` |
+| `GRAVITEE_HOST` | Gravitee APIM Management API host | `gravitee-host` |
+| `GRAVITEE_PORT` | Gravitee APIM Management API port | `8083` |
+| `GRAVITEE_ORGANIZATION` | Gravitee organization ID | `DEFAULT` |
+| `GRAVITEE_ENVIRONMENT` | Gravitee environment ID | `DEFAULT` |
+| `GRAVITEE_CONTEXT_PATH` | Gateway context path for this API | `/<DEPLOYMENT_NAME>` |
+| `GRAVITEE_BACKEND_URL` | Backend URL Gravitee Gateway proxies to | empty (auto: K8s Service DNS) |
+| `INFRA_GRAVITEE_MOUNT` | Vault path for Gravitee admin credentials | `local/infrastructure` |
+| `GRAVITEE_VERSION` | Gravitee major version (`v3`/`v4`/empty) | empty (auto-detect) |
 | `KUBECTL_IMAGE` | kubectl container image | `bitnami/kubectl:latest` |
 | `MAVEN_IMAGE` | Maven container image | `maven:3.9-eclipse-temurin-17` |
 | `KANIKO_IMAGE` | Kaniko container image | `gcr.io/kaniko-project/executor:latest` |
+
+<p align="right">(<a href="#readme-top">back to top</a>)</p>
 
 ## Directory Structure
 
 ```
 ├── .env.template              # Environment variables template
-├── k8s-setup/                 # RBAC for scoped service permissions
-│   ├── rbac-role.yaml         #   Role: scoped to service resources only
-│   └── rbac-rolebinding.yaml  #   RoleBinding: binds RBAC_USER to Role
-├── tasks/                     # Tekton task definitions
-│   ├── cleanup.yaml           #   Workspace cleanup before build
-│   ├── maven-build.yaml       #   Maven compile + package (skip tests)
-│   ├── maven-test.yaml        #   Maven test/verify
-│   ├── docker-build.yaml      #   Kaniko build + push to registry
-│   ├── db-provision.yaml      #   Create DB, user, push credentials to Vault
-│   ├── db-migrate.yaml        #   Flyway migrate + verify
-│   └── deploy.yaml            #   kubectl deploy to cluster
+├── k8s-setup/                 # RBAC and storage configurations
+│   ├── rbac/                  #   Scoped RBAC for service permissions
+│   │   ├── pipeline-role.yaml
+│   │   ├── pipeline-rolebinding.yaml
+│   │   ├── deployment-role.yaml
+│   │   ├── deployment-rolebinding.yaml
+│   │   ├── service-account.yaml
+│   │   └── tekton-dashboard-role.yaml
+│   ├── storage/               #   Persistent Volume Claims
+│   │   ├── workspace-pvc.yaml
+│   │   └── maven-cache-pvc.yaml
+│   ├── host-services.yaml
+│   └── host-services-gravitee.yaml
+├── tasks/                     # Tekton task definitions (categorized)
+│   ├── build/
+│   │   ├── cleanup.yaml
+│   │   ├── maven-build.yaml
+│   │   ├── maven-test.yaml
+│   │   └── sast-scan.yaml
+│   ├── image/
+│   │   └── docker-build.yaml
+│   ├── database/
+│   │   ├── db-provision.yaml
+│   │   └── db-migrate.yaml
+│   └── deploy/
+│       ├── config-apply.yaml
+│       ├── deploy.yaml
+│       ├── dast-scan.yaml
+│       └── gravitee-register.yaml
 ├── pipelines/                 # Tekton pipeline definitions
-│   ├── pipeline.yaml          #   Pipeline with pipeline-mode (full/plan)
-│   └── pipeline-run.yaml      #   PipelineRun template
-├── pvc/                       # Persistent Volume Claims
-│   ├── workspace-pvc.yaml     #   2Gi workspace PVC
-│   └── maven-cache-pvc.yaml   #   5Gi Maven cache PVC
-├── terraform/                 # Vault → K8s secrets (see terraform/README.md)
-│   ├── main.tf                #   Orchestrator: providers + module wiring
-│   ├── variables.tf           #   Root-level input variables
+│   ├── pipeline-init.yaml
+│   ├── pipeline-plan-apply.yaml
+│   ├── pipeline-plan-apply-production.yaml
+│   ├── pipeline-security.yaml
+│   └── pipeline-security-run.yaml
+├── templates/                 # K8s deployment templates
+│   ├── deployment.yaml
+│   └── service.yaml
+├── terraform/                 # Vault → K8s secrets
+│   ├── main.tf
+│   ├── variables.tf
+│   ├── outputs.tf
+│   ├── versions.tf
 │   ├── terraform.tfvars.example
 │   └── modules/
-│       ├── vault-data/        #   Reads secrets from Vault
-│       └── k8s-secrets/       #   Creates K8s secrets
+│       ├── vault-data/
+│       ├── k8s-maven-credentials/
+│       └── k8s-vault-token/
 └── scripts/
-    ├── lib/common.sh          #   Shared: logging, spinner, timer, env, checks
+    ├── lib/
+    │   ├── common.sh
+    │   ├── k8s.sh
+    │   └── vault.sh
     ├── stages/
-    │   ├── init-infra.sh      #   Terraform init + Vault check
-    │   └── pipeline-run.sh    #   Trigger Tekton PipelineRun + wait
-    ├── init.sh                #   One-time: health check → terraform → K8s resources
-    ├── apply.sh               #   Full pipeline: clone → build → test → image → deploy
-    ├── plan.sh                #   Partial pipeline: clone → build → test (no deploy)
-    ├── destroy.sh             #   Teardown: delete all service resources
-    └── clean.sh               #   Delete PipelineRuns/TaskRuns
+    │   ├── init-infra.sh
+    │   └── pipeline-run.sh
+    ├── init.sh
+    ├── apply.sh
+    ├── apply-production.sh
+    ├── security.sh
+    ├── destroy.sh
+    └── clean.sh
 ```
 
-## RBAC Scoping
-
-The `k8s-setup/` directory defines a scoped `Role` + `RoleBinding`:
-
-| Allowed | Blocked (shared infra) |
-|---------|----------------------|
-| Tasks, TaskRuns, Pipelines, PipelineRuns | ServiceAccount `tekton-sa` |
-| PVCs (workspace, maven-cache) | ClusterRole `tekton-sa-role` |
-| Secrets (`github-maven-credentials`, `maven-settings-secret`) | ClusterRoleBinding `tekton-sa-binding` |
-| Pods, Pods/log (read-only) | Secret `registry-credentials` |
-| Deployments, ReplicaSets | |
-| ConfigMaps (read-only) | |
-
-## Prerequisites
-
-- [dev-infrastructure](https://github.com/RizkiRachman/dev-infrastructure) running with k3d cluster, Tekton, and Vault
-- `kubectl` configured to use the dev-infra cluster context
-- `terraform` >= 1.0 installed
-- Vault seeded with GitHub credentials at `local/infrastructure/github`
-- Vault seeded with database credentials at `local/infrastructure/database`
-- `vault-host` and `postgres-host` Services+Endpoints in `tekton-pipelines` namespace
+<p align="right">(<a href="#readme-top">back to top</a>)</p>
 
 ## Troubleshooting
 
@@ -251,6 +382,44 @@ kubectl run -n tekton-pipelines test-vault --image=curlimages/curl -it --rm -- \
 kubectl run -n tekton-pipelines test-pg --image=postgres:15-alpine -it --rm -- \
   psql -h postgres-host -U dev_infrastructure -d postgres
 
+# Test Gravitee connectivity from cluster
+kubectl run -n tekton-pipelines test-gravitee --image=curlimages/curl -it --rm -- \
+  curl -s http://gravitee-host:8083/management/apis
+
+# View gravitee-register task logs
+kubectl logs -n tekton-pipelines -l tekton.dev/task=gravitee-register --all-containers
+
 # Clean up failed PipelineRuns
 ./scripts/clean.sh --failed
 ```
+
+<p align="right">(<a href="#readme-top">back to top</a>)</p>
+
+## Contributing
+
+Any contributions you make are **greatly appreciated**.
+
+1. Fork the Project
+2. Create your Feature Branch (`git checkout -b feature/AmazingFeature`)
+3. Commit your Changes (`git commit -m 'Add some AmazingFeature'`)
+4. Push to the Branch (`git push origin feature/AmazingFeature`)
+5. Open a Pull Request
+
+<p align="right">(<a href="#readme-top">back to top</a>)</p>
+
+## Contact
+
+Rizki Rachman - [@RizkiRachman](https://github.com/RizkiRachman)
+
+Project Link: [https://github.com/RizkiRachman/goods-price-comparison-deployer](https://github.com/RizkiRachman/goods-price-comparison-deployer)
+
+<p align="right">(<a href="#readme-top">back to top</a>)</p>
+
+[contributors-shield]: https://img.shields.io/github/contributors/RizkiRachman/goods-price-comparison-deployer.svg?style=for-the-badge
+[contributors-url]: https://github.com/RizkiRachman/goods-price-comparison-deployer/graphs/contributors
+[forks-shield]: https://img.shields.io/github/forks/RizkiRachman/goods-price-comparison-deployer.svg?style=for-the-badge
+[forks-url]: https://github.com/RizkiRachman/goods-price-comparison-deployer/network/members
+[stars-shield]: https://img.shields.io/github/stars/RizkiRachman/goods-price-comparison-deployer.svg?style=for-the-badge
+[stars-url]: https://github.com/RizkiRachman/goods-price-comparison-deployer/stargazers
+[issues-shield]: https://img.shields.io/github/issues/RizkiRachman/goods-price-comparison-deployer.svg?style=for-the-badge
+[issues-url]: https://github.com/RizkiRachman/goods-price-comparison-deployer/issues

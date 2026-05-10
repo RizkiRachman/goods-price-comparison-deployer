@@ -3,9 +3,21 @@
 .env.local
 .env.*.local
 
+# macOS system files
+.DS_Store
+Thumbs.db
+
 # IDE
 .idea/
+.vscode/
 .windsurf/
+
+# Logs
+*.log
+
+# Python cache (sumopod-models.py and similar)
+__pycache__/
+*.pyc
 
 # Memory context
 .memory/
@@ -14,17 +26,18 @@
 .opencode/
 .claude/
 .agents/
+.cursor/
 AGENTS.md
 
 # Terraform state (contains secrets)
 terraform/.terraform/
 terraform/*.tfstate
 terraform/*.tfstate.*
-terraform/*.lock.hcl
 terraform/terraform.tfvars
 
-opencode.json
-.opencode
-
+# Helpers / scratch
 /helpers
+scripts/helper/sumopod-models.sh
+scripts/helper/sumopod-models.py
+*.tmp
 

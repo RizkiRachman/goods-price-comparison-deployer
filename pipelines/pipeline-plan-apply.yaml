@@ -15,6 +15,8 @@ spec:
       persistentVolumeClaim:
         claimName: ${DEPLOYMENT_NAME}-pvc
   params:
+    - name: pipeline-mode
+      value: "${PIPELINE_MODE}"
     - name: git-url
       value: "${GIT_REPO_URL}"
     - name: git-revision
@@ -24,9 +26,11 @@ spec:
     - name: image-tag
       value: "${IMAGE_TAG}"
     - name: registry-host
-      value: "${REGISTRY_CLUSTER_HOST}"
+      value: "${REGISTRY_CLUSTER_HOST:-k3d-dev-infra-registry}"
     - name: registry-port
-      value: "${REGISTRY_CLUSTER_PORT}"
+      value: "${REGISTRY_CLUSTER_PORT:-5000}"
+    - name: ghcr-owner
+      value: "${GHCR_OWNER}"
     - name: test-goals
       value: "test"
     - name: deployment-namespace

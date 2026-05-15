@@ -1,6 +1,6 @@
 #!/bin/bash
 # Vault utilities: connectivity checks, mount management, secret validation.
-# Sourced by scripts that interact with Vault (init.sh, etc.).
+# Sourced by scripts that interact with Vault (register-resources.sh, etc.).
 
 check_vault() {
     local _vault_addr="${VAULT_ADDRESS_TERRAFORM:-http://localhost:8201}"
@@ -50,7 +50,7 @@ check_vault_secrets() {
 
     log "Checking required Vault secrets..."
 
-    for _secret in "${GITHUB_SECRET_NAME:-github}" "${DATABASE_SECRET_NAME:-database}"; do
+    for _secret in "${GITHUB_SECRET_NAME:-github}" "${DATABASE_SECRET_NAME:-database}" "vps"; do
         local _http_code
         _http_code=$(curl -s -o /dev/null -w "%{http_code}" --max-time 5 \
             -H "X-Vault-Token: ${_token}" \

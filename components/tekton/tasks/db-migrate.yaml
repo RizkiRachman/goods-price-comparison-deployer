@@ -1,0 +1,138 @@
+# Task: Database Migration using Flyway (via Maven)
+# Reads credentials from Vault and runs mvn flyway:migrate + verify
+apiVersion: tekton.dev/v1
+kind: Task
+metadata:
+  name: db-migrate
+  namespace: ${PIPELINE_NAMESPACE}
+spec:
+  workspaces:
+    - name: source
+    - name: maven-settings
+      optional: true
+  params:
+    - name: COMPONENT_NAME
+      type: string
+      default: "${COMPONENT_NAME}"
+    - name: VAULT_ADDRESS_PIPELINE
+      type: string
+      default: "${VAULT_ADDRESS_PIPELINE}"
+    - name: COMPONENT_MOUNT
+      type: string
+      default: "${COMPONENT_MOUNT}"
+    - name: POSTGRES_HOST
+      type: string
+      default: "${POSTGRES_HOST}"
+    - name: POSTGRES_PORT
+      type: string
+      default: "${POSTGRES_PORT}"
+    - name: DATABASE_HOST
+      type: string
+      default: ""
+      description: "External DB host. Falls back to POSTGRES_HOST if empty."
+    - name: DATABASE_PORT
+      type: string
+      default: ""
+      description: "External DB port. Falls back to POSTGRES_PORT if empty."
+    - name: MAVEN_IMAGE
+      type: string
+      default: "${MAVEN_IMAGE}"
+  volumes:
+    - name: vault-token
+      secret:
+        secretName: vault-token
+        optional: true
+    - name: maven-settings
+      secret:
+        secretName: maven-settings-secret
+    - name: maven-cache
+      persistentVolumeClaim:
+        claimName: maven-cache-pvc
+  steps:
+    - name: migrate-and-verify
+      image: $(params.MAVEN_IMAGE)
+      workingDir: $(workspaces.source.path)
+      volumeMounts:
+        - name: vault-token
+          mountPath: /var/run/secrets/vault
+          readOnly: true
+        - name: maven-settings
+          mountPath: /root/.m2/settings.xml
+          subPath: settings.xml
+        - name: maven-cache
+          mountPath: /root/.m2/repository
+      env:
+        - name: COMPONENT_NAME
+          value: $(params.COMPONENT_NAME)
+        - name: VAULT_ADDRESS_PIPELINE
+          value: $(params.VAULT_ADDRESS_PIPELINE)
+        - name: VAULT_TOKEN
+          valueFrom:
+            secretKeyRef:
+              name: vault-token
+              key: token
+              optional: true
+        - name: COMPONENT_MOUNT
+          value: $(params.COMPONENT_MOUNT)
+        - name: POSTGRES_HOST
+          value: $(params.POSTGRES_HOST)
+        - name: POSTGRES_PORT
+          value: $(params.POSTGRES_PORT)
+        - name: DATABASE_HOST
+          value: $(params.DATABASE_HOST)
+        - name: DATABASE_PORT
+          value: $(params.DATABASE_PORT)
+      script: |
+        #!/bin/bash
+        set -e
+
+        # Install jq (download binary — faster than apt-get update)
+        if ! command -v jq >/dev/null 2>&1; then
+            echo "Downloading jq..."
+            curl -sfL https://github.com/jqlang/jq/releases/download/jq-1.7.1/jq-linux-amd64 -o /usr/local/bin/jq
+            chmod +x /usr/local/bin/jq
+        fi
+
+        # Resolve database host: prefer DATABASE_HOST if set, fall back to POSTGRES_HOST
+        DB_HOST="${DATABASE_HOST:-${POSTGRES_HOST}}"
+        DB_PORT="${DATABASE_PORT:-${POSTGRES_PORT}}"
+
+        echo "Database: ${DB_HOST}:${DB_PORT}"
+
+        # Read database credentials from Vault
+        VAULT_RESPONSE=$(curl -s -H "X-Vault-Token: ${VAULT_TOKEN}" \
+            "${VAULT_ADDRESS_PIPELINE}/v1/${COMPONENT_MOUNT}/data/${COMPONENT_NAME}")
+
+        if echo "$VAULT_RESPONSE" | grep -q '"errors"' || [ -z "$VAULT_RESPONSE" ]; then
+            echo "Failed to read credentials from Vault"
+            exit 1
+        fi
+
+        DB_NAME=$(echo "$VAULT_RESPONSE" | jq -r '.data.data."database_name"')
+        DB_USER=$(echo "$VAULT_RESPONSE" | jq -r '.data.data."database_username"')
+        DB_PASS=$(echo "$VAULT_RESPONSE" | jq -r '.data.data."database_password"')
+
+        echo "Database: ${DB_NAME}"
+        echo "User: ${DB_USER}"
+
+        # Run Flyway migration
+        echo "Running: mvn flyway:migrate"
+        mvn flyway:migrate -Pflyway \
+            -DDATABASE_HOST="${DB_HOST}" \
+            -DDATABASE_PORT="${DB_PORT}" \
+            -DDATABASE_NAME="${DB_NAME}" \
+            -DDATABASE_USERNAME="${DB_USER}" \
+            -DDATABASE_PASSWORD="${DB_PASS}" 2>&1
+
+        echo "Migration complete"
+
+        # Verify migration status
+        echo "Verifying migration status..."
+        mvn flyway:info -Pflyway \
+            -DDATABASE_HOST="${DB_HOST}" \
+            -DDATABASE_PORT="${DB_PORT}" \
+            -DDATABASE_NAME="${DB_NAME}" \
+            -DDATABASE_USERNAME="${DB_USER}" \
+            -DDATABASE_PASSWORD="${DB_PASS}" 2>&1
+
+        echo "Migration verified successfully"

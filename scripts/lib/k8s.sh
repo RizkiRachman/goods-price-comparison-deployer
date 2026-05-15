@@ -1,6 +1,6 @@
 #!/bin/bash
 # Kubernetes utilities: variable sets for envsubst, resource application.
-# Sourced by init.sh (and any script that applies k8s manifests).
+# Sourced by register-resources.sh (and any script that applies k8s manifests).
 
 # ── envsubst variable sets ────────────────────────────────
 # Each set contains exactly the variables referenced in the corresponding manifest tree.
@@ -8,19 +8,16 @@
 # shell variables that happen to share a name with YAML content.
 
 TASK_VARS='${PIPELINE_NAMESPACE} ${KUBECTL_IMAGE} ${MAVEN_IMAGE} ${KANIKO_IMAGE}
-  ${DEPLOYMENT_NAMESPACE} ${DEPLOYMENT_NAME} ${DEPLOYMENT_PORT} ${DEPLOYMENT_NODEPORT}
-  ${COMPONENT_NAME} ${VAULT_ADDRESS_PIPELINE}
-  ${INFRA_DB_MOUNT} ${COMPONENT_MOUNT}
-  ${POSTGRES_HOST} ${POSTGRES_PORT} ${DATABASE_HOST} ${DATABASE_PORT} ${MIGRATIONS_PATH}
-  ${PROPERTIES_REPO_URL} ${PROPERTIES_REPO_DEFAULT_BRANCH} ${ENVIRONMENT_NAME}
-  ${GHCR_OWNER}
+  ${DEPLOYMENT_PORT} ${DEPLOYMENT_NODEPORT}
+  ${MIGRATIONS_PATH}
+  ${MAVEN_SETTINGS_PATH}
   ${GRAVITEE_HOST} ${GRAVITEE_PORT} ${GRAVITEE_ORGANIZATION} ${GRAVITEE_ENVIRONMENT}
   ${GRAVITEE_CONTEXT_PATH} ${GRAVITEE_BACKEND_URL} ${INFRA_GRAVITEE_MOUNT} ${GRAVITEE_VERSION}'
 
-PIPELINE_VARS='${PIPELINE_NAMESPACE}
+PIPELINE_VARS='${PIPELINE_MODE} ${PIPELINE_NAMESPACE}
   ${GIT_REPO_URL} ${GIT_REPO_DEFAULT_BRANCH}
   ${IMAGE_NAME} ${IMAGE_TAG}
-  ${GHCR_OWNER}
+  ${MAVEN_SETTINGS_PATH}
   ${DEPLOYMENT_NAMESPACE} ${DEPLOYMENT_NAME} ${DEPLOYMENT_PORT} ${DEPLOYMENT_NODEPORT}
   ${KUBECTL_IMAGE}
   ${COMPONENT_NAME} ${VAULT_ADDRESS_PIPELINE}
@@ -28,12 +25,13 @@ PIPELINE_VARS='${PIPELINE_NAMESPACE}
   ${POSTGRES_HOST} ${POSTGRES_PORT} ${DATABASE_HOST} ${DATABASE_PORT}
   ${PROPERTIES_REPO_URL} ${PROPERTIES_REPO_DEFAULT_BRANCH} ${ENVIRONMENT_NAME}
   ${GRAVITEE_HOST} ${GRAVITEE_PORT} ${GRAVITEE_ORGANIZATION} ${GRAVITEE_ENVIRONMENT}
-  ${GRAVITEE_CONTEXT_PATH} ${GRAVITEE_BACKEND_URL} ${INFRA_GRAVITEE_MOUNT} ${GRAVITEE_VERSION}'
+  ${GRAVITEE_CONTEXT_PATH} ${GRAVITEE_BACKEND_URL} ${INFRA_GRAVITEE_MOUNT} ${GRAVITEE_VERSION}
+  ${REGISTRY_CLUSTER_HOST} ${REGISTRY_CLUSTER_PORT}'
 
-PIPELINE_RUN_VARS='${PIPELINE_NAMESPACE} ${PIPELINE_SERVICE_ACCOUNT}
+PIPELINE_RUN_VARS='${PIPELINE_MODE} ${PIPELINE_NAMESPACE} ${PIPELINE_SERVICE_ACCOUNT}
   ${GIT_REPO_URL} ${GIT_REPO_DEFAULT_BRANCH}
   ${IMAGE_NAME} ${IMAGE_TAG}
-  ${GHCR_OWNER}
+  ${MAVEN_SETTINGS_PATH}
   ${DEPLOYMENT_NAMESPACE} ${DEPLOYMENT_NAME} ${DEPLOYMENT_PORT} ${DEPLOYMENT_NODEPORT}
   ${KUBECTL_IMAGE}
   ${VAULT_ADDRESS_PIPELINE} ${COMPONENT_NAME}
@@ -41,7 +39,8 @@ PIPELINE_RUN_VARS='${PIPELINE_NAMESPACE} ${PIPELINE_SERVICE_ACCOUNT}
   ${POSTGRES_HOST} ${POSTGRES_PORT} ${DATABASE_HOST} ${DATABASE_PORT}
   ${PROPERTIES_REPO_URL} ${PROPERTIES_REPO_DEFAULT_BRANCH} ${ENVIRONMENT_NAME}
   ${GRAVITEE_HOST} ${GRAVITEE_PORT} ${GRAVITEE_ORGANIZATION} ${GRAVITEE_ENVIRONMENT}
-  ${GRAVITEE_CONTEXT_PATH} ${GRAVITEE_BACKEND_URL} ${INFRA_GRAVITEE_MOUNT} ${GRAVITEE_VERSION}'
+  ${GRAVITEE_CONTEXT_PATH} ${GRAVITEE_BACKEND_URL} ${INFRA_GRAVITEE_MOUNT} ${GRAVITEE_VERSION}
+  ${REGISTRY_CLUSTER_HOST} ${REGISTRY_CLUSTER_PORT}'
 
 SECURITY_RUN_VARS='${PIPELINE_NAMESPACE} ${PIPELINE_SERVICE_ACCOUNT}
   ${GIT_REPO_URL} ${GIT_REPO_DEFAULT_BRANCH}
@@ -98,10 +97,10 @@ sync_host_endpoints() {
 # ── Resource Application ──────────────────────────────────
 
 apply_k8s_resources() {
-    K8S_SETUP_DIR="$DEPLOYER_DIR/k8s-setup"
-    TASKS_DIR="$DEPLOYER_DIR/tasks"
-    PIPELINES_DIR="$DEPLOYER_DIR/pipelines"
-    TEMPLATES_DIR="$DEPLOYER_DIR/templates"
+    K8S_SETUP_DIR="$DEPLOYER_DIR/components/kubernetes"
+    TASKS_DIR="$DEPLOYER_DIR/components/tekton/tasks"
+    PIPELINES_DIR="$DEPLOYER_DIR/components/tekton/pipelines"
+    TEMPLATES_DIR="$DEPLOYER_DIR/components/kubernetes/app"
 
     # Host gateway services (Vault + Postgres reachable from pods)
     log "Applying host gateway services (vault-host, postgres-host)..."
@@ -184,17 +183,17 @@ apply_k8s_resources() {
 
     # Pipelines
     log "Applying Tekton pipelines..."
-    _pfile="$PIPELINES_DIR/pipeline-init.yaml"
+    _pfile="$PIPELINES_DIR/pipeline.yaml"
     if [ -f "$_pfile" ]; then
         envsubst "$PIPELINE_VARS" < "$_pfile" | kubectl apply -f - \
-            && log "  Applied: pipeline-init.yaml" \
-            || warn "  Failed: pipeline-init.yaml"
+            && log "  Applied: pipeline.yaml" \
+            || warn "  Failed: pipeline.yaml"
     fi
 
-    _sfile="$PIPELINES_DIR/pipeline-security.yaml"
+    _sfile="$PIPELINES_DIR/security-pipeline.yaml"
     if [ -f "$_sfile" ]; then
         envsubst "$PIPELINE_VARS" < "$_sfile" | kubectl apply -f - \
-            && log "  Applied: pipeline-security.yaml" \
-            || warn "  Failed: pipeline-security.yaml"
+            && log "  Applied: security-pipeline.yaml" \
+            || warn "  Failed: security-pipeline.yaml"
     fi
 }

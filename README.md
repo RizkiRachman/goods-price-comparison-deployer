@@ -47,26 +47,17 @@ All builds run **in-cluster via Tekton** — no local Maven or Docker required.
 
 ## Architecture
 
-```
-dev-infrastructure (shared)                    this repo (deployer)
-─────────────────────────                      ──────────────────────────────────
-k3d cluster + registry                         terraform/          Vault → K8s secrets
-Tekton Pipelines/Dashboard                     tasks/              Tekton task definitions (categorized)
-Namespace, SA, ClusterRole, registry secret    pipelines/          Pipeline + PipelineRun templates
-Vault + PostgreSQL (on host)                   k8s-setup/          Scoped RBAC + Storage
-Gravitee APIM (on host)                        scripts/            init / apply / security / destroy
-                                               templates/          K8s deployment + service templates
-```
+![System Architecture](diagrams/architecture.png)
 
-The shared infrastructure is managed by `dev-infrastructure`. This deployer registers service-specific resources (tasks, pipeline, PVCs, secrets) into the shared `tekton-pipelines` namespace.
+*See [diagrams/architecture.py](diagrams/architecture.py) to regenerate.*
+
+The shared infrastructure is managed by `dev-infrastructure`. This deployer registers service-specific CI/CD resources (Tekton tasks, pipelines, RBAC, PVCs, secrets) into the shared cluster. The production VPS runs behind a **Cloudflare Tunnel** with **Caddy** as reverse proxy — frontend is publicly accessible at `aneh.biz.id`, backend stays internal on `localhost:8080`.
 
 ### Credential Flow
 
-```
-Vault (local/infrastructure/github)  ──►  Terraform apply  ──►  K8s Secrets
-  GITHUB_USERNAME, GITHUB_TOKEN                                      github-maven-credentials
-                                                                     maven-settings-secret
-```
+![Credential Flow](diagrams/credential-flow.png)
+
+*See [diagrams/credential-flow.py](diagrams/credential-flow.py) to regenerate.*
 
 - **Vault** stores the source of truth (managed by dev-infrastructure)
 - **Terraform** reads Vault and creates K8s secrets declaratively
@@ -86,7 +77,10 @@ Passwords are masked in logs: `6e****ae (32 chars)`.
 
 ### RBAC Scoping
 
-The `k8s-setup/rbac/` directory defines scoped `Role` + `RoleBinding` resources:
+The `components/kubernetes/rbac/` directory defines scoped `Role` + `RoleBinding` resources:
+
+<details>
+<summary>RBAC rules</summary>
 
 | Allowed | Blocked (shared infra) |
 |---------|----------------------|
@@ -96,6 +90,8 @@ The `k8s-setup/rbac/` directory defines scoped `Role` + `RoleBinding` resources:
 | Pods, Pods/log (read-only) | Secret `registry-credentials` |
 | Deployments, ReplicaSets | |
 | ConfigMaps, Services, Endpoints | |
+
+</details>
 
 ### Host Connectivity
 
@@ -115,14 +111,16 @@ kubectl run -n tekton-pipelines test-vault --image=curlimages/curl -it --rm -- \
 
 ## Built With
 
-* [![Tekton](https://img.shields.io/badge/Tekton-FF6600?style=for-the-badge&logo=tekton&logoColor=white)](https://tekton.dev/)
-* [![Kubernetes](https://img.shields.io/badge/Kubernetes-326CE5?style=for-the-badge&logo=kubernetes&logoColor=white)](https://kubernetes.io/)
-* [![Terraform](https://img.shields.io/badge/Terraform-844FBA?style=for-the-badge&logo=terraform&logoColor=white)](https://www.terraform.io/)
-* [![Vault](https://img.shields.io/badge/Vault-FFDD57?style=for-the-badge&logo=vault&logoColor=black)](https://www.vaultproject.io/)
-* [![Docker](https://img.shields.io/badge/Docker-2496ED?style=for-the-badge&logo=docker&logoColor=white)](https://www.docker.com/)
-* [![PostgreSQL](https://img.shields.io/badge/PostgreSQL-4169E1?style=for-the-badge&logo=postgresql&logoColor=white)](https://www.postgresql.org/)
-* [![Flyway](https://img.shields.io/badge/Flyway-CC0200?style=for-the-badge&logo=flyway&logoColor=white)](https://flywaydb.org/)
-* [![Gravitee](https://img.shields.io/badge/Gravitee-2A9D8F?style=for-the-badge&logo=gravitee&logoColor=white)](https://www.gravitee.io/)
+[![Tekton](https://img.shields.io/badge/Tekton-FF6600?style=for-the-badge&logo=tekton&logoColor=white)](https://tekton.dev/)
+[![Kubernetes](https://img.shields.io/badge/Kubernetes-326CE5?style=for-the-badge&logo=kubernetes&logoColor=white)](https://kubernetes.io/)
+[![Terraform](https://img.shields.io/badge/Terraform-844FBA?style=for-the-badge&logo=terraform&logoColor=white)](https://www.terraform.io/)
+[![Vault](https://img.shields.io/badge/Vault-FFDD57?style=for-the-badge&logo=vault&logoColor=black)](https://www.vaultproject.io/)
+[![Docker](https://img.shields.io/badge/Docker-2496ED?style=for-the-badge&logo=docker&logoColor=white)](https://www.docker.com/)
+[![PostgreSQL](https://img.shields.io/badge/PostgreSQL-4169E1?style=for-the-badge&logo=postgresql&logoColor=white)](https://www.postgresql.org/)
+[![Flyway](https://img.shields.io/badge/Flyway-CC0200?style=for-the-badge&logo=flyway&logoColor=white)](https://flywaydb.org/)
+[![Gravitee](https://img.shields.io/badge/Gravitee-2A9D8F?style=for-the-badge&logo=gravitee&logoColor=white)](https://www.gravitee.io/)
+[![Caddy](https://img.shields.io/badge/Caddy-1F8B4C?style=for-the-badge&logo=caddy&logoColor=white)](https://caddyserver.com/)
+[![Cloudflare](https://img.shields.io/badge/Cloudflare-F38020?style=for-the-badge&logo=cloudflare&logoColor=white)](https://www.cloudflare.com/)
 
 <p align="right">(<a href="#readme-top">back to top</a>)</p>
 
@@ -148,9 +146,9 @@ kubectl run -n tekton-pipelines test-vault --image=curlimages/curl -it --rm -- \
 2. Configure this repo:
    ```bash
    cp .env.template .env
-   cd terraform
+   cd components/terraform
    cp terraform.tfvars.example terraform.tfvars  # Set vault_token
-   cd ..
+   cd ../..
    ```
 
 3. Create host-proxy services (Vault + PostgreSQL + Gravitee access from pods). Replace `192.168.x.x` with your host IP:
@@ -253,6 +251,9 @@ Tasks are skipped via Tekton `when` expressions — no separate pipeline definit
 
 All pipeline/task defaults come from `.env`. No hardcoded values in YAML — every param uses `${VAR}` with envsubst. Fallback defaults are in `scripts/lib/common.sh`.
 
+<details>
+<summary>Click to expand environment variables table</summary>
+
 | Variable | Description | Default |
 |----------|-------------|---------|
 | `PIPELINE_NAMESPACE` | Namespace for pipeline resources | `tekton-pipelines` |
@@ -290,79 +291,102 @@ All pipeline/task defaults come from `.env`. No hardcoded values in YAML — eve
 | `MAVEN_IMAGE` | Maven container image | `maven:3.9-eclipse-temurin-17` |
 | `KANIKO_IMAGE` | Kaniko container image | `gcr.io/kaniko-project/executor:latest` |
 
+</details>
+
 <p align="right">(<a href="#readme-top">back to top</a>)</p>
 
 ## Directory Structure
 
 ```
 ├── .env.template              # Environment variables template
-├── k8s-setup/                 # RBAC and storage configurations
-│   ├── rbac/                  #   Scoped RBAC for service permissions
-│   │   ├── pipeline-role.yaml
-│   │   ├── pipeline-rolebinding.yaml
-│   │   ├── deployment-role.yaml
-│   │   ├── deployment-rolebinding.yaml
-│   │   ├── service-account.yaml
-│   │   └── tekton-dashboard-role.yaml
-│   ├── storage/               #   Persistent Volume Claims
-│   │   ├── workspace-pvc.yaml
-│   │   └── maven-cache-pvc.yaml
-│   ├── host-services.yaml
-│   └── host-services-gravitee.yaml
-├── tasks/                     # Tekton task definitions (categorized)
-│   ├── build/
-│   │   ├── cleanup.yaml
-│   │   ├── maven-build.yaml
-│   │   ├── maven-test.yaml
-│   │   └── sast-scan.yaml
-│   ├── image/
-│   │   └── docker-build.yaml
-│   ├── database/
-│   │   ├── db-provision.yaml
-│   │   └── db-migrate.yaml
-│   └── deploy/
-│       ├── config-apply.yaml
-│       ├── deploy.yaml
-│       ├── dast-scan.yaml
-│       └── gravitee-register.yaml
-├── pipelines/                 # Tekton pipeline definitions
-│   ├── pipeline-init.yaml
-│   ├── pipeline-plan-apply.yaml
-│   ├── pipeline-plan-apply-production.yaml
-│   ├── pipeline-security.yaml
-│   └── pipeline-security-run.yaml
-├── templates/                 # K8s deployment templates
-│   ├── deployment.yaml
-│   └── service.yaml
-├── terraform/                 # Vault → K8s secrets
-│   ├── main.tf
-│   ├── variables.tf
-│   ├── outputs.tf
-│   ├── versions.tf
-│   ├── terraform.tfvars.example
-│   └── modules/
-│       ├── vault-data/
-│       ├── k8s-maven-credentials/
-│       └── k8s-vault-token/
-└── scripts/
-    ├── lib/
-    │   ├── common.sh
-    │   ├── k8s.sh
-    │   └── vault.sh
-    ├── stages/
-    │   ├── init-infra.sh
-    │   └── pipeline-run.sh
-    ├── init.sh
-    ├── apply.sh
-    ├── apply-production.sh
-    ├── security.sh
-    ├── destroy.sh
-    └── clean.sh
+├── installation/              # One-time setup scripts
+│   ├── register-resources.sh  #   Health check → Terraform → K8s resources
+│   ├── setup-vps.sh           #   Full VPS bootstrap
+│   └── setup/                 #   Individual setup modules
+│       ├── 01-users.sh
+│       ├── 02-deps.sh
+│       ├── 03-clone-repos.sh
+│       └── 04-systemd.sh
+├── components/                # Infrastructure definitions
+│   ├── tekton/
+│   │   ├── tasks/             #   All Tekton task definitions (flat)
+│   │   │   ├── cleanup.yaml
+│   │   │   ├── maven-build.yaml
+│   │   │   ├── maven-test.yaml
+│   │   │   ├── sast-scan.yaml
+│   │   │   ├── docker-build.yaml
+│   │   │   ├── db-provision.yaml
+│   │   │   ├── db-migrate.yaml
+│   │   │   ├── config-apply.yaml
+│   │   │   ├── deploy.yaml
+│   │   │   ├── dast-scan.yaml
+│   │   │   ├── gravitee-register.yaml
+│   │   │   └── vps-deploy.yaml
+│   │   └── pipelines/         #   Pipeline definitions
+│   │       ├── pipeline.yaml
+│   │       ├── pipeline-run.yaml
+│   │       ├── security-pipeline.yaml
+│   │       └── security-run.yaml
+│   ├── kubernetes/            # K8s resource definitions
+│   │   ├── rbac/              #   Scoped RBAC for service permissions
+│   │   ├── storage/           #   Persistent Volume Claims
+│   │   ├── services/          #   Host gateway endpoints
+│   │   └── app/               #   Deployment templates
+│   ├── vps/                   # VPS operational scripts
+│   │   ├── caddy/             #   Caddy management
+│   │   │   └── control.sh
+│   │   ├── cloudflare/
+│   │   │   └── tunnel.sh      #   Cloudflare Tunnel setup
+│   │   └── services/
+│   │       ├── logs.sh        #   Tail systemd logs
+│   │       ├── dashboard.sh   #   Frontend management
+│   │       ├── deploy-dashboard.sh
+│   │       └── status.sh      #   Cluster + Gravitee status
+│   └── terraform/             # Vault → K8s secrets
+│       ├── main.tf
+│       ├── variables.tf
+│       ├── outputs.tf
+│       ├── versions.tf
+│       ├── README.md
+│       ├── terraform.tfvars.example
+│       └── modules/
+│           ├── vault-data/
+│           ├── k8s-maven-credentials/
+│           ├── k8s-vault-token/
+│           └── k8s-vps-ssh/
+├── docs/                      # Documentation
+│   └── vps-setup-guide.md     #   Complete VPS setup guide
+├── diagrams/                  # Architecture diagrams (Python + PNG)
+│   ├── generate.sh            #   Regenerate all diagrams
+│   ├── requirements.txt       #   Python deps
+│   ├── architecture.py        #   System infrastructure
+│   ├── credential-flow.py     #   Credential flow
+│   ├── pipeline.py            #   CI/CD pipeline flow
+│   ├── data-flow.py           #   Data flow
+│   └── *.png                  #   Generated PNG diagrams
+├── helpers/                   # Development helper scripts
+│   └── port-forward.sh        #   SSH tunnel for local dev
+├── scripts/
+│   ├── lib/
+│   │   ├── common.sh          #   Shared: logging, spinner, timer, env
+│   │   ├── k8s.sh             #   Kubernetes helper functions
+│   │   └── vault.sh           #   Vault helper functions
+│   ├── stages/
+│   │   ├── init-infra.sh      #   Terraform init + Vault check
+│   │   └── pipeline-run.sh    #   Trigger PipelineRun + wait
+│   ├── apply.sh               #   Full pipeline: build → test → deploy
+│   ├── apply-production.sh    #   Production VPS deploy
+│   ├── security.sh            #   SAST + DAST analysis
+│   ├── destroy.sh             #   Delete all service resources
+│   └── clean-runs.sh          #   Delete PipelineRuns/TaskRuns
 ```
 
 <p align="right">(<a href="#readme-top">back to top</a>)</p>
 
 ## Troubleshooting
+
+<details>
+<summary>CLI commands</summary>
 
 ```bash
 # Check PipelineRun status
@@ -392,6 +416,8 @@ kubectl logs -n tekton-pipelines -l tekton.dev/task=gravitee-register --all-cont
 # Clean up failed PipelineRuns
 ./scripts/clean.sh --failed
 ```
+
+</details>
 
 <p align="right">(<a href="#readme-top">back to top</a>)</p>
 

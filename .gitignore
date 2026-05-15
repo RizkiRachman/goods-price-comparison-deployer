@@ -1,43 +1,41 @@
-# Env files with secrets
+# ── Secrets ──
 .env
 .env.local
 .env.*.local
+.env.production
 
-# macOS system files
+# ── Terraform state (contains secrets) ──
+components/terraform/.terraform/
+components/terraform/*.tfstate
+components/terraform/*.tfstate.*
+components/terraform/terraform.tfvars
+
+# ── macOS ──
 .DS_Store
 Thumbs.db
 
-# IDE
+# ── IDE ──
 .idea/
 .vscode/
 .windsurf/
 
-# Logs
+# ── Logs ──
 *.log
 
-# Python cache (sumopod-models.py and similar)
+# ── Python ──
 __pycache__/
 *.pyc
 
-# Memory context
-.memory/
-
-# AI tooling
+# ── AI tooling ──
 .opencode/
 .claude/
 .agents/
 .cursor/
-AGENTS.md
+.lean-ctx/
 
-# Terraform state (contains secrets)
-terraform/.terraform/
-terraform/*.tfstate
-terraform/*.tfstate.*
-terraform/terraform.tfvars
-
-# Helpers / scratch
-/helpers
-scripts/helper/sumopod-models.sh
-scripts/helper/sumopod-models.py
+# ── Temp / scratch ──
 *.tmp
-
+*.swp
+/memory/
+opencode.json
+AGENTS.md

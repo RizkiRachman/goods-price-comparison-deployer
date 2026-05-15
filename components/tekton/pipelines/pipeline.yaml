@@ -1,0 +1,367 @@
+# Pipeline: Full CI/CD
+# Scope: clone → build → test → image → db-provision → db-migrate → config-apply → [deploy | vps-deploy] → gravitee-register
+# Modes: 'local' (build image + K8s deploy) or 'production' (VPS SSH deploy)
+apiVersion: tekton.dev/v1
+kind: Pipeline
+metadata:
+  name: ${DEPLOYMENT_NAME}-pipeline
+  namespace: ${PIPELINE_NAMESPACE}
+spec:
+  workspaces:
+    - name: shared-workspace
+  params:
+    - name: pipeline-mode
+      type: string
+      default: "local"
+      description: "Pipeline mode: 'local' (K8s deploy) or 'production' (VPS SSH deploy)"
+    - name: git-url
+      type: string
+      default: "${GIT_REPO_URL}"
+    - name: git-revision
+      type: string
+      default: "${GIT_REPO_DEFAULT_BRANCH}"
+    - name: image-name
+      type: string
+      default: "${IMAGE_NAME}"
+    - name: image-tag
+      type: string
+      default: "${IMAGE_TAG}"
+    - name: registry-host
+      type: string
+      default: "${REGISTRY_CLUSTER_HOST}"
+    - name: registry-port
+      type: string
+      default: "${REGISTRY_CLUSTER_PORT}"
+    - name: maven-settings-path
+      type: string
+      default: "/home/deploy/.m2/settings.xml"
+      description: "Path to Maven settings.xml on VPS for GitHub Packages auth"
+    - name: test-goals
+      type: string
+      default: "test"
+      description: "Maven test goals: 'test' or 'verify'"
+    - name: deployment-namespace
+      type: string
+      default: "${DEPLOYMENT_NAMESPACE}"
+    - name: deployment-name
+      type: string
+      default: "${DEPLOYMENT_NAME}"
+    - name: deployment-port
+      type: string
+      default: "${DEPLOYMENT_PORT}"
+    - name: deployment-nodeport
+      type: string
+      default: "${DEPLOYMENT_NODEPORT}"
+    - name: kubectl-image
+      type: string
+      default: "${KUBECTL_IMAGE}"
+    - name: vault-address-pipeline
+      type: string
+      default: "${VAULT_ADDRESS_PIPELINE}"
+    - name: component-name
+      type: string
+      default: "${COMPONENT_NAME}"
+    - name: postgres-host
+      type: string
+      default: "${POSTGRES_HOST}"
+    - name: postgres-port
+      type: string
+      default: "${POSTGRES_PORT}"
+    - name: database-host
+      type: string
+      default: "${DATABASE_HOST}"
+      description: "External database host. Falls back to postgres-host if empty."
+    - name: database-port
+      type: string
+      default: "${DATABASE_PORT}"
+      description: "External database port. Falls back to postgres-port if empty."
+    - name: infra-db-mount
+      type: string
+      default: "${INFRA_DB_MOUNT}"
+    - name: component-mount
+      type: string
+      default: "${COMPONENT_MOUNT}"
+    - name: properties-repo-url
+      type: string
+      default: "${PROPERTIES_REPO_URL}"
+    - name: properties-repo-default-branch
+      type: string
+      default: "${PROPERTIES_REPO_DEFAULT_BRANCH}"
+    - name: environment-name
+      type: string
+      default: "${ENVIRONMENT_NAME}"
+    - name: gravitee-host
+      type: string
+      default: "${GRAVITEE_HOST}"
+    - name: gravitee-port
+      type: string
+      default: "${GRAVITEE_PORT}"
+    - name: gravitee-organization
+      type: string
+      default: "${GRAVITEE_ORGANIZATION}"
+    - name: gravitee-environment
+      type: string
+      default: "${GRAVITEE_ENVIRONMENT}"
+    - name: gravitee-context-path
+      type: string
+      default: "${GRAVITEE_CONTEXT_PATH}"
+    - name: gravitee-backend-url
+      type: string
+      default: "${GRAVITEE_BACKEND_URL}"
+    - name: infra-gravitee-mount
+      type: string
+      default: "${INFRA_GRAVITEE_MOUNT}"
+    - name: gravitee-version
+      type: string
+      default: "${GRAVITEE_VERSION}"
+
+  tasks:
+    - name: cleanup
+      taskRef:
+        name: cleanup
+      workspaces:
+        - name: output
+          workspace: shared-workspace
+
+    - name: clone
+      taskRef:
+        name: git-clone
+      runAfter: [cleanup]
+      workspaces:
+        - name: output
+          workspace: shared-workspace
+      params:
+        - name: url
+          value: $(params.git-url)
+        - name: revision
+          value: $(params.git-revision)
+
+    - name: build
+      taskRef:
+        name: maven-build
+      runAfter: [clone]
+      workspaces:
+        - name: output
+          workspace: shared-workspace
+
+    - name: test
+      taskRef:
+        name: maven-test
+      runAfter: [build]
+      workspaces:
+        - name: output
+          workspace: shared-workspace
+      params:
+        - name: GOALS
+          value: $(params.test-goals)
+
+    - name: build-image
+      when:
+        - input: $(params.pipeline-mode)
+          operator: in
+          values: ["local"]
+      taskRef:
+        name: docker-build
+      runAfter: [test]
+      workspaces:
+        - name: output
+          workspace: shared-workspace
+      params:
+        - name: IMAGE
+          value: "$(params.registry-host):$(params.registry-port)/$(params.image-name):$(params.image-tag)"
+
+    - name: db-provision
+      when:
+        - input: $(params.pipeline-mode)
+          operator: in
+          values: ["local"]
+      taskRef:
+        name: db-provision
+      runAfter: [build-image]
+      workspaces:
+        - name: source
+          workspace: shared-workspace
+      params:
+        - name: COMPONENT_NAME
+          value: $(params.component-name)
+        - name: VAULT_ADDRESS_PIPELINE
+          value: $(params.vault-address-pipeline)
+        - name: POSTGRES_HOST
+          value: $(params.postgres-host)
+        - name: POSTGRES_PORT
+          value: $(params.postgres-port)
+        - name: DATABASE_HOST
+          value: $(params.database-host)
+        - name: DATABASE_PORT
+          value: $(params.database-port)
+        - name: INFRA_DB_MOUNT
+          value: $(params.infra-db-mount)
+        - name: COMPONENT_MOUNT
+          value: $(params.component-mount)
+
+    - name: db-migrate
+      when:
+        - input: $(params.pipeline-mode)
+          operator: in
+          values: ["local"]
+      taskRef:
+        name: db-migrate
+      runAfter: [db-provision]
+      workspaces:
+        - name: source
+          workspace: shared-workspace
+      params:
+        - name: COMPONENT_NAME
+          value: $(params.component-name)
+        - name: VAULT_ADDRESS_PIPELINE
+          value: $(params.vault-address-pipeline)
+        - name: POSTGRES_HOST
+          value: $(params.postgres-host)
+        - name: POSTGRES_PORT
+          value: $(params.postgres-port)
+        - name: DATABASE_HOST
+          value: $(params.database-host)
+        - name: DATABASE_PORT
+          value: $(params.database-port)
+        - name: COMPONENT_MOUNT
+          value: $(params.component-mount)
+
+    - name: config-apply
+      when:
+        - input: $(params.pipeline-mode)
+          operator: in
+          values: ["local", "production"]
+      taskRef:
+        name: config-apply
+      runAfter: [db-migrate]
+      workspaces:
+        - name: source
+          workspace: shared-workspace
+      params:
+        - name: PROPERTIES_REPO_URL
+          value: $(params.properties-repo-url)
+        - name: PROPERTIES_REPO_DEFAULT_BRANCH
+          value: $(params.properties-repo-default-branch)
+        - name: ENVIRONMENT_NAME
+          value: $(params.environment-name)
+        - name: DEPLOYMENT_NAME
+          value: $(params.deployment-name)
+        - name: NAMESPACE
+          value: $(params.deployment-namespace)
+        - name: VAULT_ADDRESS_PIPELINE
+          value: $(params.vault-address-pipeline)
+        - name: COMPONENT_MOUNT
+          value: $(params.component-mount)
+        - name: COMPONENT_NAME
+          value: $(params.component-name)
+        - name: POSTGRES_HOST
+          value: $(params.postgres-host)
+        - name: POSTGRES_PORT
+          value: $(params.postgres-port)
+        - name: DATABASE_HOST
+          value: $(params.database-host)
+        - name: DATABASE_PORT
+          value: $(params.database-port)
+
+    - name: deploy
+      when:
+        - input: $(params.pipeline-mode)
+          operator: in
+          values: ["local"]
+      taskRef:
+        name: deploy
+      runAfter: [config-apply]
+      workspaces:
+        - name: source
+          workspace: shared-workspace
+      params:
+        - name: PIPELINE_MODE
+          value: $(params.pipeline-mode)
+        - name: IMAGE_LOCAL
+          value: "$(params.registry-host):$(params.registry-port)/$(params.image-name):$(params.image-tag)"
+        - name: IMAGE_GHCR
+          value: ""
+        - name: IMAGE_NAME
+          value: $(params.image-name)
+        - name: NAMESPACE
+          value: $(params.deployment-namespace)
+        - name: DEPLOYMENT_NAME
+          value: $(params.deployment-name)
+        - name: DEPLOYMENT_PORT
+          value: $(params.deployment-port)
+        - name: DEPLOYMENT_NODEPORT
+          value: $(params.deployment-nodeport)
+
+    - name: vps-deploy
+      when:
+        - input: $(params.pipeline-mode)
+          operator: in
+          values: ["production"]
+      taskRef:
+        name: vps-deploy
+      runAfter: [config-apply]
+      workspaces:
+        - name: source
+          workspace: shared-workspace
+      params:
+        - name: COMPONENT_NAME
+          value: $(params.component-name)
+        - name: VAULT_ADDRESS_PIPELINE
+          value: $(params.vault-address-pipeline)
+        - name: COMPONENT_MOUNT
+          value: $(params.component-mount)
+        - name: POSTGRES_HOST
+          value: $(params.postgres-host)
+        - name: POSTGRES_PORT
+          value: $(params.postgres-port)
+        - name: DATABASE_HOST
+          value: $(params.database-host)
+        - name: DATABASE_PORT
+          value: $(params.database-port)
+        - name: DEPLOYMENT_NAME
+          value: $(params.deployment-name)
+        - name: MAVEN_SETTINGS_PATH
+          value: $(params.maven-settings-path)
+
+    - name: gravitee-register
+      when:
+        - input: $(params.pipeline-mode)
+          operator: in
+          values: ["local"]
+      taskRef:
+        name: gravitee-register
+      runAfter: [deploy, vps-deploy]
+      workspaces:
+        - name: source
+          workspace: shared-workspace
+      params:
+        - name: GRAVITEE_HOST
+          value: $(params.gravitee-host)
+        - name: GRAVITEE_PORT
+          value: $(params.gravitee-port)
+        - name: GRAVITEE_ORGANIZATION
+          value: $(params.gravitee-organization)
+        - name: GRAVITEE_ENVIRONMENT
+          value: $(params.gravitee-environment)
+        - name: GRAVITEE_CONTEXT_PATH
+          value: $(params.gravitee-context-path)
+        - name: GRAVITEE_BACKEND_URL
+          value: $(params.gravitee-backend-url)
+        - name: DEPLOYMENT_NAME
+          value: $(params.deployment-name)
+        - name: DEPLOYMENT_NAMESPACE
+          value: $(params.deployment-namespace)
+        - name: DEPLOYMENT_PORT
+          value: $(params.deployment-port)
+        - name: VAULT_ADDRESS_PIPELINE
+          value: $(params.vault-address-pipeline)
+        - name: COMPONENT_MOUNT
+          value: $(params.component-mount)
+        - name: COMPONENT_NAME
+          value: $(params.component-name)
+        - name: IMAGE_TAG
+          value: $(params.image-tag)
+        - name: INFRA_GRAVITEE_MOUNT
+          value: $(params.infra-gravitee-mount)
+        - name: GRAVITEE_VERSION
+          value: $(params.gravitee-version)

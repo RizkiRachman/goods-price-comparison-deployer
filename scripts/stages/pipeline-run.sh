@@ -5,7 +5,7 @@
 #   stage_security_pipeline_run — SAST + DAST only (non-main branches)
 
 stage_pipeline_run() {
-    local template="$DEPLOYER_DIR/pipelines/pipeline-plan-apply.yaml"
+    local template="$DEPLOYER_DIR/components/tekton/pipelines/pipeline-run.yaml"
 
     if [ ! -f "$template" ]; then
         error "PipelineRun template not found: ${template}"
@@ -13,8 +13,8 @@ stage_pipeline_run() {
 
     timer_start
 
-    if [ "$PIPELINE_MODE" = "cloud" ]; then
-        stage "Pipeline Run (clone → build → test → db → config → deploy → gravitee) [cloud]"
+    if [ "$PIPELINE_MODE" = "production" ]; then
+        stage "Pipeline Run (clone → build → test → db → config → vps-deploy → gravitee) [production]"
     else
         stage "Pipeline Run (clone → build → test → image → db → config → deploy → gravitee) [local]"
     fi
@@ -26,9 +26,12 @@ stage_pipeline_run() {
     step "PipelineRun: ${RUN_NAME}"
 
     envsubst "$PIPELINE_RUN_VARS" < "$template" \
+        | tee /tmp/pipelinerun-debug.yaml \
         | sed "s|generateName: ${DEPLOYMENT_NAME}-[^$]*|name: ${RUN_NAME}|" \
         | kubectl apply -f - \
         || error "Failed to create PipelineRun"
+
+    step "Debug: PipelineRun YAML saved to /tmp/pipelinerun-debug.yaml"
 
     log "PipelineRun submitted. Waiting for tasks to execute..."
     echo ""
@@ -84,7 +87,7 @@ stage_pipeline_run() {
 }
 
 stage_security_pipeline_run() {
-    local template="$DEPLOYER_DIR/pipelines/pipeline-security-run.yaml"
+    local template="$DEPLOYER_DIR/components/tekton/pipelines/security-run.yaml"
     local branch="${1:-${GIT_REPO_DEFAULT_BRANCH}}"
 
     if [ ! -f "$template" ]; then
@@ -151,86 +154,6 @@ stage_security_pipeline_run() {
     kubectl get taskruns -n "$PIPELINE_NAMESPACE" \
         -l "tekton.dev/pipelineRun=${RUN_NAME}" \
         -o custom-columns=TASK:.metadata.labels.tekton\\.dev/pipelineTask,STATUS:.status.conditions[0].reason \
-        2>/dev/null || true
-
-    timer_print
-}
-
-stage_production_pipeline_run() {
-    local template="$DEPLOYER_DIR/pipelines/pipeline-plan-apply-production.yaml"
-
-    if [ ! -f "$template" ]; then
-        error "Production PipelineRun template not found: ${template}"
-    fi
-
-    timer_start
-
-    stage "Production Pipeline Run (external database)"
-    echo ""
-    echo "  Database host: ${DATABASE_HOST:-${POSTGRES_HOST}}"
-    echo "  Database port: ${DATABASE_PORT:-${POSTGRES_PORT}}"
-    echo "  Source: ${DATABASE_HOST:+external DATABASE_HOST}${DATABASE_HOST:-local POSTGRES_HOST}"
-    echo ""
-
-    step "Pipeline: ${DEPLOYMENT_NAME}-pipeline"
-    step "Namespace: ${PIPELINE_NAMESPACE}"
-
-    local RUN_NAME="${DEPLOYMENT_NAME}-production-$(date +%s)"
-    step "PipelineRun: ${RUN_NAME}"
-
-    envsubst "$PIPELINE_RUN_VARS" < "$template" \
-        | sed "s|generateName: ${DEPLOYMENT_NAME}-production-[^$]*|name: ${RUN_NAME}|" \
-        | kubectl apply -f - \
-        || error "Failed to create production PipelineRun"
-
-    log "Production PipelineRun submitted. Waiting for tasks to execute..."
-    echo ""
-
-    local timeout=600
-    local elapsed=0
-
-    while [ $elapsed -lt $timeout ]; do
-        local condition reason
-        condition=$(kubectl get pipelinerun "$RUN_NAME" -n "$PIPELINE_NAMESPACE" \
-            -o jsonpath='{.status.conditions[0].type}' 2>/dev/null || echo "Running")
-        reason=$(kubectl get pipelinerun "$RUN_NAME" -n "$PIPELINE_NAMESPACE" \
-            -o jsonpath='{.status.conditions[0].reason}' 2>/dev/null || echo "Running")
-
-        if [ "$condition" = "Succeeded" ] || [ "$reason" = "Succeeded" ]; then
-            printf "\r                                                              \r"
-            log "Production pipeline completed successfully!"
-            break
-        elif [ "$condition" = "Failed" ] || [ "$reason" = "Failed" ]; then
-            printf "\r                                                              \r"
-            local fail_msg
-            fail_msg=$(kubectl get pipelinerun "$RUN_NAME" -n "$PIPELINE_NAMESPACE" \
-                -o jsonpath='{.status.conditions[0].message}' 2>/dev/null || echo "Unknown error")
-            echo ""
-            error "Production pipeline failed: ${fail_msg}"
-        fi
-
-        local char="${_SPINNER_CHARS:$((elapsed % ${#_SPINNER_CHARS})):1}"
-        printf "\r  ${CYAN}%s${NC} Waiting... %ds elapsed (status: %s)   " "$char" "$elapsed" "$reason"
-        sleep 5
-        elapsed=$((elapsed+5))
-    done
-
-    printf "\r                                                              \r"
-
-    if [ $elapsed -ge $timeout ]; then
-        error "Production pipeline timed out after ${timeout}s"
-    fi
-
-    echo ""
-    step "Task results:"
-    kubectl get taskruns -n "$PIPELINE_NAMESPACE" \
-        -l "tekton.dev/pipelineRun=${RUN_NAME}" \
-        -o custom-columns=NAME:.metadata.name,STATUS:.status.conditions[0].type 2>/dev/null || true
-
-    echo ""
-    step "PipelineRun details:"
-    kubectl get pipelinerun "$RUN_NAME" -n "$PIPELINE_NAMESPACE" \
-        -o custom-columns=NAME:.metadata.name,STATUS:.status.conditions[0].type,START:.status.startTime,COMPLETION:.status.completionTime \
         2>/dev/null || true
 
     timer_print

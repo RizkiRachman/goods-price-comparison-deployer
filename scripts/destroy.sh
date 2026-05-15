@@ -86,7 +86,7 @@ if [ -f "terraform.tfvars" ]; then
     terraform destroy -auto-approve
     log "Terraform secrets destroyed."
 else
-    error "terraform.tfvars not found. Cannot destroy secrets without Terraform config. Run ./scripts/init.sh first."
+    error "terraform.tfvars not found. Cannot destroy secrets without Terraform config. Run ./installation/init.sh first."
 fi
 
 echo ""

@@ -4,7 +4,7 @@
 _LIB_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SCRIPTS_DIR="$(dirname "$_LIB_DIR")"
 DEPLOYER_DIR="$(dirname "$SCRIPTS_DIR")"
-TERRAFORM_DIR="$DEPLOYER_DIR/terraform"
+TERRAFORM_DIR="$DEPLOYER_DIR/components/terraform"
 
 # ── Logging ───────────────────────────────────────────────
 
@@ -88,23 +88,38 @@ load_env() {
     else
         warn ".env file not found. Some defaults will be used."
     fi
+
+    # Load environment-specific overrides
+    local _mode="${PIPELINE_MODE:-local}"
+    local _mode_file=""
+    if [ -f "$DEPLOYER_DIR/.env.${_mode}" ]; then
+        _mode_file="$DEPLOYER_DIR/.env.${_mode}"
+    elif [ -f "$(pwd)/.env.${_mode}" ]; then
+        _mode_file="$(pwd)/.env.${_mode}"
+    fi
+    if [ -n "$_mode_file" ]; then
+        set -a && source "$_mode_file" && set +a
+    fi
 }
 
 set_defaults() {
     VAULT_ADDRESS_TERRAFORM="${VAULT_ADDRESS_TERRAFORM:-http://localhost:8201}"
     PIPELINE_NAMESPACE="${PIPELINE_NAMESPACE:-dev-infrastructure-pipelines}"
+    PIPELINE_MODE="${PIPELINE_MODE:-local}"
     DEPLOYMENT_NAMESPACE="${DEPLOYMENT_NAMESPACE:-dev-infrastructure}"
-    DEPLOYMENT_NAME="${DEPLOYMENT_NAME:-goods-price-service}"
+    DEPLOYMENT_NAME="${DEPLOYMENT_NAME:-goods-price-comparison-service}"
     DEPLOYMENT_PORT="${DEPLOYMENT_PORT:-8080}"
     DEPLOYMENT_NODEPORT="${DEPLOYMENT_NODEPORT:-30080}"
     KUBECTL_IMAGE="${KUBECTL_IMAGE:-bitnami/kubectl:latest}"
     MAVEN_IMAGE="${MAVEN_IMAGE:-maven:3.9-eclipse-temurin-17}"
     KANIKO_IMAGE="${KANIKO_IMAGE:-gcr.io/kaniko-project/executor:latest}"
-    GHCR_OWNER="${GHCR_OWNER:-rizkirachnan}"
     RBAC_USER="${RBAC_USER:-dev-infra-admin}"
     PIPELINE_SERVICE_ACCOUNT="${PIPELINE_SERVICE_ACCOUNT:-dev-infra}"
     IMAGE_NAME="${IMAGE_NAME:-goods-price-comparison-service}"
     IMAGE_TAG="${IMAGE_TAG:-latest}"
+    REGISTRY_CLUSTER_HOST="${REGISTRY_CLUSTER_HOST:-k3d-dev-infra-registry}"
+    REGISTRY_CLUSTER_PORT="${REGISTRY_CLUSTER_PORT:-5000}"
+    MAVEN_SETTINGS_PATH="${MAVEN_SETTINGS_PATH:-/home/deploy/.m2/settings.xml}"
     GIT_REPO_URL="${GIT_REPO_URL:-https://github.com/RizkiRachman/goods-price-comparison-service.git}"
     GIT_REPO_DEFAULT_BRANCH="${GIT_REPO_DEFAULT_BRANCH:-main}"
 
@@ -205,7 +220,7 @@ check_terraform() {
 check_tekton_pipeline() {
     local _name="${DEPLOYMENT_NAME:-goods-price-service}-pipeline"
     if ! kubectl get pipeline "$_name" -n "${PIPELINE_NAMESPACE:-dev-infrastructure-pipelines}" &>/dev/null; then
-        error "Pipeline '${_name}' not found. Run ./scripts/init.sh first."
+        error "Pipeline '${_name}' not found. Run ./installation/init.sh first."
     fi
 }
 
@@ -253,7 +268,7 @@ health_check_infra() {
             warn "  Registry (localhost:${REGISTRY_PORT:-5002}): unreachable"; FAIL=$((FAIL+1))
         fi
     else
-        log "  Registry: skipped (cloud mode — using GHCR)"; PASS=$((PASS+1))
+        log "  Registry: skipped (production mode — VPS deploy)"; PASS=$((PASS+1))
     fi
 
     echo ""

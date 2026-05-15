@@ -11,14 +11,29 @@
       "name": "Sumopod AI",
       "options": {
         "baseURL": "https://ai.sumopod.com/v1",
-        "apiKey": "sk-0GfTRJv8pJSSgecu5dyySQ"
+        "apiKey": "sk-TSXCtwIgIswQoJanGqVYbA"
       },
       "models": {
         "kimi-k2.6": {
-          "name": "Kimi K2.6"
+          "name": "Kimi K2.6",
+          "options": {
+            "reasoningEffort": "high",
+            "textVerbosity": "low"
+          }
         },
         "deepseek-v4-flash": {
-          "name": "DeepSeek V4 Flash"
+          "name": "DeepSeek V4 Flash",
+          "options": {
+            "reasoningEffort": "high",
+            "textVerbosity": "low"
+          }
+        },
+        "glm-5.1": {
+          "name": "glm-5.1",
+          "options": {
+            "reasoningEffort": "high",
+            "textVerbosity": "low"
+          }
         }
       }
     }

@@ -1,9 +1,9 @@
 #!/bin/bash
 # Apply: execute the full CI/CD pipeline (clone → build → test → image → db → deploy).
-# Assumes infrastructure is already initialized (run ./scripts/init.sh first).
+# Assumes infrastructure is already initialized (run ./installation/init.sh first).
 #
-# Usage: ./scripts/apply.sh            # Local mode (default): build + push to local registry
-#        ./scripts/apply.sh --cloud    # Cloud mode: skip build, deploy from GHCR
+# Usage: ./scripts/apply.sh                # Local mode (default): build + push to local registry + K8s deploy
+#        ./scripts/apply.sh --production   # Production mode: CI + VPS SSH deploy
 
 set -e
 
@@ -14,23 +14,40 @@ source "$SCRIPT_DIR/lib/k8s.sh"
 source "$SCRIPT_DIR/stages/pipeline-run.sh"
 
 PIPELINE_MODE="local"
-if [ "${1:-}" = "--cloud" ]; then
-    PIPELINE_MODE="cloud"
+if [ "${1:-}" = "--production" ]; then
+    PIPELINE_MODE="production"
 fi
 export PIPELINE_MODE
 
 load_env
 set_defaults
+
+# Force mode-specific values (overrides .env / .env.production)
+if [ "$PIPELINE_MODE" = "production" ]; then
+    ENVIRONMENT_NAME="production"
+    COMPONENT_MOUNT="production/component"
+    INFRA_DB_MOUNT="production/infrastructure"
+fi
+
+# Explicitly export key variables so envsubst picks them up
+export COMPONENT_MOUNT COMPONENT_NAME INFRA_DB_MOUNT ENVIRONMENT_NAME DATABASE_HOST DATABASE_PORT
+
+echo ""
+echo "━━━ Environment Check ━━━"
+echo "  PIPELINE_MODE:    ${PIPELINE_MODE}"
+echo "  COMPONENT_MOUNT:  ${COMPONENT_MOUNT}"
+echo "  COMPONENT_NAME:   ${COMPONENT_NAME}"
+echo "  INFRA_DB_MOUNT:   ${INFRA_DB_MOUNT}"
+echo "  ENVIRONMENT_NAME: ${ENVIRONMENT_NAME}"
+echo ""
+
 check_prerequisites
+
 check_tekton_pipeline
 
 sync_host_endpoints
 
-if [ "$PIPELINE_MODE" = "cloud" ]; then
-    IMAGE_REF="ghcr.io/${GHCR_OWNER}/${IMAGE_NAME}:${IMAGE_TAG}"
-else
-    IMAGE_REF="${REGISTRY_CLUSTER_HOST:-k3d-dev-infra-registry}:${REGISTRY_CLUSTER_PORT:-5000}/${IMAGE_NAME}:${IMAGE_TAG}"
-fi
+IMAGE_REF="${REGISTRY_CLUSTER_HOST:-k3d-dev-infra-registry}:${REGISTRY_CLUSTER_PORT:-5000}/${IMAGE_NAME}:${IMAGE_TAG}"
 
 echo ""
 echo "=========================================="
@@ -39,7 +56,11 @@ echo "=========================================="
 echo ""
 echo "  Mode:    ${PIPELINE_MODE}"
 echo "  Service: ${DEPLOYMENT_NAME}"
-echo "  Image:   ${IMAGE_REF}"
+if [ "$PIPELINE_MODE" = "production" ]; then
+    echo "  Deploy:  VPS (deploy@43.129.38.221)"
+else
+    echo "  Image:   ${IMAGE_REF}"
+fi
 echo ""
 
 timer_start
@@ -49,7 +70,4 @@ echo ""
 echo "=========================================="
 echo "  APPLY COMPLETE — $(timer_elapsed)"
 echo "=========================================="
-echo ""
-echo "  Service: ${DEPLOYMENT_NAMESPACE}/${DEPLOYMENT_NAME}"
-echo "  Image:   ${IMAGE_REF}"
 echo ""

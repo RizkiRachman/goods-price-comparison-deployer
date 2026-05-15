@@ -8,26 +8,60 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
-- Security scanning tasks: SAST (Static Application Security Testing) and DAST (Dynamic Application Security Testing)
-- Gravitee API registration task for automatic API gateway configuration
-- New pipeline templates: `pipeline-init.yaml`, `pipeline-plan-apply.yaml`, `pipeline-security.yaml`, `pipeline-security-run.yaml`
-- New Terraform modules: `k8s-maven-credentials` and `k8s-vault-token` (replaces monolithic `k8s-secrets`)
-- New helper scripts: `scripts/lib/k8s.sh`, `scripts/lib/vault.sh`, `scripts/security.sh`
-- Kubernetes deployment and service templates in `templates/` directory
-- Host proxy services configuration for Gravitee (`k8s-setup/host-services-gravitee.yaml`)
-- Storage and RBAC configuration reorganized into subdirectories
+- **Caddy reverse proxy** — serves dashboard static files (`dist/`) and proxies `/v1/*`, `/v2/*` to backend on `localhost:8080`. Backend is never directly exposed.
+- **Cloudflare Tunnel** — routes `aneh.biz.id` → `localhost:80` (Caddy). No open ports (except SSH 22). TLS terminated at Cloudflare Edge.
+- **VPS production deploy task** (`tasks/deploy/vps-deploy.yaml`): SSH-based deployment to production VPS
+- **New Terraform module** `k8s-vps-ssh`: Creates K8s secret `vps-ssh-key` from Vault (`local/infrastructure/vps`)
+- VPS SSH credential management via Vault → Terraform → K8s Secrets
+- Support for `--production` flag in `apply.sh` (VPS SSH deploy mode)
+- **Caddy reverse proxy** on `:80` — serves dashboard `dist/` and proxies `/v1/*`, `/v2/*` → backend `:8080`
+- **Cloudflare Tunnel** — routes `aneh.biz.id` → `localhost:80` (Caddy); backend never publicly exposed
+- **Passwordless sudo** for deploy user — expanded to manage Caddy + cloudflared
+- **`docs/vps-setup-guide.md`** — comprehensive VPS setup guide (SSH → systemd → Caddy → Tunnel → CI/CD)
 
 ### Changed
-- **BREAKING**: Reorganized all Tekton tasks into categorized subdirectories:
-  - `tasks/build/` - cleanup, maven-build, maven-test, sast-scan
-  - `tasks/database/` - db-migrate, db-provision
-  - `tasks/deploy/` - config-apply, dast-scan, deploy, gravitee-register
-  - `tasks/image/` - docker-build
-- Updated default `MIGRATIONS_PATH` from `src/main/resources/db/migration` to `db/migration`
-- Refactored `scripts/lib/common.sh` with improved logging and utility functions
-- Enhanced `scripts/stages/pipeline-run.sh` with better error handling
-- Updated `.env.template` with new environment variables for Gravitee and security scanning
-- Restructured `k8s-setup/` with organized rbac/ and storage/ subdirectories
+- **Project structure refactored** — consolidated into `components/`:
+  - `components/tekton/` — tasks + pipelines
+  - `components/kubernetes/` — RBAC, storage, services, deployment templates
+  - `components/vps/` — Caddy, Cloudflare, service management scripts
+  - `components/terraform/` — Vault → K8s secrets
+- **Renamed for clarity**:
+  - `installation/init.sh` → `register-resources.sh`
+  - `installation/vps.sh` → `setup-vps.sh`
+  - `installation/setup/01-vps.sh` → `01-users.sh`
+  - `installation/setup/03-clone.sh` → `03-clone-repos.sh`
+  - `installation/setup/04-service.sh` → `04-systemd.sh`
+  - `scripts/clean.sh` → `clean-runs.sh`
+  - `components/tekton/pipelines/*` → flattened naming (`pipeline.yaml`, `pipeline-run.yaml`, `security-pipeline.yaml`, `security-run.yaml`)
+  - `components/vps/caddy/manage.sh` → `control.sh`
+  - `helpers/be-tunnel.sh` → `port-forward.sh`
+- **`sumopod` → `vps`** naming — all SSH host aliases, ops scripts, and docs references updated
+- **All internal source paths and doc links updated** — consistent with new structure
+- **README.md** — architecture diagram updated with Caddy + Tunnel flow; directory tree and script tables refreshed
+- **AGENTS.md** — architecture, directory tree, and production VPS section synced with current setup
+
+### Changed
+- **Performance: Docker build optimized from ~5min to ~12s** — Reverted service repo Dockerfile from multi-stage (Maven build inside Docker) to simple JRE runtime. The `maven-build` Tekton task pre-compiles the JAR, so the Dockerfile just `COPY target/*.jar` from the workspace. This eliminates redundant Maven compilation inside Docker.
+- **`tasks/image/docker-build.yaml`**: Removed `GH_PACKAGES_USERNAME` / `GH_PACKAGES_TOKEN` env vars and `--build-arg` flags — no longer needed since the Dockerfile doesn't run Maven.
+- **Kaniko `--build-arg` syntax fix**: Changed from `--build-arg=VAR` (single arg with `=`) to separate `--build-arg` / `VAR` (two args). The former syntax was not resolving environment variable values correctly.
+- **Kaniko cache management**: Temporarily disabled `--cache=true` to clear stale cached layers from failed builds, then re-enabled it. Added note in AGENTS.md about cache invalidation when build-args change.
+- **Terraform re-applied**: Refreshed `github-maven-credentials` and `maven-settings-secret` K8s secrets from Vault after GitHub token rotation.
+
+### Removed
+- `apply.sh`: Replaced `--cloud` mode with `--production` mode; removed GHCR references
+- `apply-production.sh`: Simplified to a thin wrapper around `apply.sh --production`
+- Pipeline (`pipeline-init.yaml`): Added conditional `vps-deploy` task for production mode; `deploy` now only runs in local mode; removed GHCR params
+- Pipeline Run template: Removed `ghcr-owner` param, added `maven-settings-path`
+- `scripts/lib/k8s.sh`: Removed GHCR_OWNER from envsubst vars, added MAVEN_SETTINGS_PATH
+- `scripts/lib/common.sh`: Removed GHCR_OWNER default; registry health check skipped for production mode
+- `scripts/lib/vault.sh`: Added `vps` to `check_vault_secrets` loop
+- `scripts/stages/pipeline-run.sh`: Removed `stage_production_pipeline_run` function (no longer needed)
+- `.env.template`: Added VPS config vars (`VPS_SSH_USER`, `VPS_SSH_HOST`, `MAVEN_SETTINGS_PATH`); removed GHCR variables
+- Documentation: Updated AGENTS.md, README.md with production mode flow
+
+### Removed
+- Cloud/GHCR mode (`--cloud` flag, GHCR_OWNER references)
+- `pipelines/pipeline-plan-apply-production.yaml` (no longer needed — single pipeline handles all modes)
 
 ### Removed
 - **BREAKING**: Removed old flat task files (cleanup.yaml, db-migrate.yaml, db-provision.yaml, deploy.yaml, docker-build.yaml, maven-build.yaml, maven-test.yaml)

@@ -1,0 +1,249 @@
+# Task: VPS Production Deploy
+# SSHs to production VPS, pulls latest code, builds, migrates DB, restarts service.
+# Runs inside pipeline when pipeline-mode=production.
+apiVersion: tekton.dev/v1
+kind: Task
+metadata:
+  name: vps-deploy
+  namespace: ${PIPELINE_NAMESPACE}
+spec:
+  workspaces:
+    - name: source
+  params:
+    - name: COMPONENT_NAME
+      type: string
+      default: "${COMPONENT_NAME}"
+    - name: VAULT_ADDRESS_PIPELINE
+      type: string
+      default: "${VAULT_ADDRESS_PIPELINE}"
+    - name: COMPONENT_MOUNT
+      type: string
+      default: "${COMPONENT_MOUNT}"
+    - name: POSTGRES_HOST
+      type: string
+      default: "${POSTGRES_HOST}"
+    - name: POSTGRES_PORT
+      type: string
+      default: "${POSTGRES_PORT}"
+    - name: DATABASE_HOST
+      type: string
+      default: ""
+    - name: DATABASE_PORT
+      type: string
+      default: ""
+    - name: DEPLOYMENT_NAME
+      type: string
+      default: "${DEPLOYMENT_NAME}"
+    - name: MAVEN_SETTINGS_PATH
+      type: string
+      default: "/home/deploy/.m2/settings.xml"
+  volumes:
+    - name: vault-token
+      secret:
+        secretName: vault-token
+        optional: true
+    - name: vps-ssh
+      secret:
+        secretName: vps-ssh-key
+        defaultMode: 0600
+  steps:
+    - name: vps-deploy
+      image: alpine:3.19
+      workingDir: $(workspaces.source.path)
+      volumeMounts:
+        - name: vault-token
+          mountPath: /var/run/secrets/vault
+          readOnly: true
+        - name: vps-ssh
+          mountPath: /var/run/secrets/vps
+          readOnly: true
+      env:
+        - name: COMPONENT_NAME
+          value: $(params.COMPONENT_NAME)
+        - name: VAULT_ADDRESS_PIPELINE
+          value: $(params.VAULT_ADDRESS_PIPELINE)
+        - name: COMPONENT_MOUNT
+          value: $(params.COMPONENT_MOUNT)
+        - name: POSTGRES_HOST
+          value: $(params.POSTGRES_HOST)
+        - name: POSTGRES_PORT
+          value: $(params.POSTGRES_PORT)
+        - name: DATABASE_HOST
+          value: $(params.DATABASE_HOST)
+        - name: DATABASE_PORT
+          value: $(params.DATABASE_PORT)
+        - name: DEPLOYMENT_NAME
+          value: $(params.DEPLOYMENT_NAME)
+        - name: MAVEN_SETTINGS_PATH
+          value: $(params.MAVEN_SETTINGS_PATH)
+        - name: VAULT_TOKEN
+          valueFrom:
+            secretKeyRef:
+              name: vault-token
+              key: token
+              optional: true
+      script: |
+        #!/bin/sh
+        set -e
+
+        mask_value() {
+            local val="$1"
+            local len=${#val}
+            if [ "$len" -gt 6 ]; then
+                echo "$(echo "$val" | cut -c1-4)****$(echo "$val" | cut -c$((len-3))-$len) ($len chars)"
+            else
+                echo "****"
+            fi
+        }
+
+        echo "=== VPS Production Deploy ==="
+        echo "  COMPONENT_MOUNT=${COMPONENT_MOUNT}"
+        echo "  COMPONENT_NAME=${COMPONENT_NAME}"
+
+        APP_DIR="/home/production/app/goods-price-comparison-service"
+        ENV_FILE="${APP_DIR}/.env.production"
+
+        # Install SSH client + curl + jq
+        apk add --no-cache openssh-client curl jq >/dev/null 2>&1
+
+        # Write SSH key
+        mkdir -p /root/.ssh
+        cp /var/run/secrets/vps/id_rsa /root/.ssh/id_rsa
+        chmod 600 /root/.ssh/id_rsa
+        ssh-keygen -p -m PEM -f /root/.ssh/id_rsa -N "" -q 2>/dev/null || \
+          echo "  Warning: Key conversion skipped (using original format)"
+
+        SSH_USER=$(cat /var/run/secrets/vps/user)
+        SSH_HOST=$(cat /var/run/secrets/vps/host)
+        SSH_PORT=$(cat /var/run/secrets/vps/port)
+        VAULT_TOKEN=$(cat /var/run/secrets/vault/token 2>/dev/null || echo "")
+        SSH_OPTS="-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -p ${SSH_PORT}"
+
+        echo "→ Connecting to ${SSH_USER}@${SSH_HOST}:${SSH_PORT}"
+
+        # ═══════════════════════════════════════════════════
+        echo ""
+        echo "━━━ PHASE 1: Environment Setup ━━━"
+        # ═══════════════════════════════════════════════════
+
+        # ── Step 1: Read credentials from Vault ──
+        echo "→ Step 1: Reading credentials from Vault..."
+        echo "  Vault Address: ${VAULT_ADDRESS_PIPELINE}"
+        echo "  Component Mount: ${COMPONENT_MOUNT}"
+        echo "  Component Name: ${COMPONENT_NAME}"
+        VAULT_SECRET_PATH="${COMPONENT_MOUNT}/data/${COMPONENT_NAME}"
+        echo "  Vault Path: /v1/${VAULT_SECRET_PATH}"
+        VAULT_RESPONSE=$(curl -sf \
+          -H "X-Vault-Token: ${VAULT_TOKEN}" \
+          "${VAULT_ADDRESS_PIPELINE}/v1/${VAULT_SECRET_PATH}")
+
+        echo "  Raw keys: $(echo "${VAULT_RESPONSE}" | jq -r '.data.data | keys | join(", ")')"
+
+        if echo "${VAULT_RESPONSE}" | jq -e '.data.data' >/dev/null 2>&1; then
+          echo "  ✅ Read $(echo "${VAULT_RESPONSE}" | jq -r '.data.data | keys | length') variables from ${VAULT_SECRET_PATH}"
+        else
+          echo "  ❌ Failed to read credentials from Vault at ${VAULT_SECRET_PATH}"
+          exit 1
+        fi
+
+        # ── Step 2: Write .env.production on VPS ──
+        echo "→ Step 2: Writing .env.production on VPS..."
+        ENV_CONTENT="# Auto-generated by pipeline\n"
+        for KEY in $(echo "${VAULT_RESPONSE}" | jq -r '.data.data | keys[]'); do
+          VALUE=$(echo "${VAULT_RESPONSE}" | jq -r ".data.data.\"${KEY}\"")
+          ENV_KEY=$(echo "${KEY}" | tr '[:lower:]' '[:upper:]')
+          ENV_CONTENT="${ENV_CONTENT}${ENV_KEY}=${VALUE}\n"
+        done
+        ENV_B64=$(echo -e "${ENV_CONTENT}" | base64)
+        ssh ${SSH_OPTS} "${SSH_USER}@${SSH_HOST}" "echo '${ENV_B64}' | base64 -d > ${ENV_FILE} && chown ${SSH_USER}:${SSH_USER} ${ENV_FILE}"
+        ENV_COUNT=$(echo "${VAULT_RESPONSE}" | jq -r '.data.data | keys | length')
+       
+        # ── Step 3: Print .env.production (masked) ──
+        echo "→ Step 3: Verifying .env.production..."
+        for KEY in $(echo "${VAULT_RESPONSE}" | jq -r '.data.data | keys[]'); do
+          VALUE=$(echo "${VAULT_RESPONSE}" | jq -r ".data.data.\"${KEY}\"")
+          ENV_KEY=$(echo "${KEY}" | tr '[:lower:]' '[:upper:]')
+        done
+       
+        # ── Step 4: Configure git + JDK ──
+        echo "→ Step 4: Configuring VPS environment..."
+        ssh ${SSH_OPTS} "${SSH_USER}@${SSH_HOST}" \
+          "git config --global --add safe.directory ${APP_DIR} && which javac >/dev/null 2>&1 || (apt-get update -qq && apt-get install -y -qq openjdk-17-jdk)"
+
+        # ── Step 5: Fix app directory ownership ──
+        ssh ${SSH_OPTS} "${SSH_USER}@${SSH_HOST}" \
+          "chown -R ${SSH_USER}:${SSH_USER} ${APP_DIR}"
+
+        # ═══════════════════════════════════════════════════
+        echo ""
+        echo "━━━ PHASE 2: Build ━━━"
+        # ═══════════════════════════════════════════════════
+
+        # ── Step 6: Verify git branch ──
+        echo "→ Step 6: Verifying git branch..."
+        BRANCH=$(ssh ${SSH_OPTS} "${SSH_USER}@${SSH_HOST}" \
+          "cd ${APP_DIR} && git rev-parse --abbrev-ref HEAD")
+        echo "  Current branch: ${BRANCH}"
+        if [ "${BRANCH}" != "main" ]; then
+          echo "  Not on main branch. Attempting checkout..."
+          ssh ${SSH_OPTS} "${SSH_USER}@${SSH_HOST}" \
+            "cd ${APP_DIR} && git checkout main"
+        fi
+
+        # ── Step 7: Git pull ──
+        echo "→ Step 7: Pulling latest code..."
+        ssh ${SSH_OPTS} "${SSH_USER}@${SSH_HOST}" \
+          "cd ${APP_DIR} && git pull origin main"
+
+        # ── Step 8: Maven clean install ──
+        echo "→ Step 8: Maven clean install..."
+        ssh ${SSH_OPTS} "${SSH_USER}@${SSH_HOST}" "cd ${APP_DIR} && mvn clean install -U -q -s ${MAVEN_SETTINGS_PATH}"
+
+        # ── Step 9: Maven package ──
+        echo "→ Step 9: Maven package..."
+        ssh ${SSH_OPTS} "${SSH_USER}@${SSH_HOST}" "cd ${APP_DIR} && mvn package -DskipTests -q -s ${MAVEN_SETTINGS_PATH}"
+
+        # ═══════════════════════════════════════════════════
+        echo ""
+        echo "━━━ PHASE 3: Run ━━━"
+        # ═══════════════════════════════════════════════════
+
+        # ── Step 10: Restart systemd service ──
+        echo "→ Step 10: Restarting service..."
+        ssh ${SSH_OPTS} "${SSH_USER}@${SSH_HOST}" "sudo -n systemctl restart ${DEPLOYMENT_NAME}" 2>&1 || {
+          echo "  ❌ sudo failed. Run this once on the VPS:"
+          echo "     echo '${SSH_USER} ALL=(ALL) NOPASSWD: /usr/bin/systemctl restart ${DEPLOYMENT_NAME}, /usr/bin/systemctl status ${DEPLOYMENT_NAME}, /usr/bin/journalctl -u ${DEPLOYMENT_NAME} *' | sudo tee /etc/sudoers.d/deploy-service"
+          exit 1
+        }
+
+        # ── Step 11: Health check with retries ──
+        echo "→ Step 11: Waiting for service to be healthy..."
+        HEALTH="000"
+        for i in 1 2 3 4 5; do
+          sleep 3
+          HEALTH=$(ssh ${SSH_OPTS} "${SSH_USER}@${SSH_HOST}" \
+            "curl -sf -o /dev/null -w '%{http_code}' http://localhost:8080/actuator/health 2>/dev/null || echo '000'")
+          echo "  Attempt ${i}/5: HTTP ${HEALTH}"
+          if [ "${HEALTH}" = "200" ]; then
+            break
+          fi
+        done
+
+        if [ "${HEALTH}" = "200" ]; then
+          echo "  ✅ Health check passed (HTTP ${HEALTH})"
+        else
+          echo "  ❌ Health check failed after 5 attempts"
+          JOURNAL=$(ssh ${SSH_OPTS} "${SSH_USER}@${SSH_HOST}" \
+            "sudo -n journalctl -u ${DEPLOYMENT_NAME} --no-pager -n 20 2>/dev/null" || true)
+          if [ -n "$JOURNAL" ]; then
+            echo "  ── Last 20 lines of service logs ──"
+            echo "$JOURNAL" | sed 's/^/  /'
+          else
+          echo "  ⚠️ Could not read service logs. Check manually:"
+          echo "     ssh ${SSH_USER}@${SSH_HOST} 'sudo journalctl -u ${DEPLOYMENT_NAME} --no-pager -n 50'"
+          fi
+          exit 1
+        fi
+
+        echo ""
+        echo "=== VPS Deploy Complete ==="

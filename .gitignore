@@ -37,3 +37,5 @@ __pycache__/
 *.tmp
 *.swp
 /memory/
+opencode.json
+AGENTS.md

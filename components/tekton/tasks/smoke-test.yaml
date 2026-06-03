@@ -1,7 +1,8 @@
 # Task: Smoke Test (Newman)
 # Runs Postman collection smoke tests against the deployed service.
 # Local mode: uses K8s service DNS directly.
-# Production mode: creates SSH tunnel to VPS, runs tests through the tunnel.
+# Production mode: SSHs to VPS, runs Newman directly on localhost:8080.
+#   (SSH tunnel doesn't work — deploy user has 'restrict' in authorized_keys)
 # Runs after deploy (local) or vps-deploy (production), before gravitee-register.
 apiVersion: tekton.dev/v1
 kind: Task
@@ -12,14 +13,13 @@ spec:
   workspaces:
     - name: source
   params:
+    - name: PIPELINE_MODE
+      type: string
+      description: "Pipeline mode: 'local' or 'production'"
     - name: SERVICE_URL
       type: string
       default: ""
-      description: "Service base URL for local mode (e.g. http://goods-price-service:8080). Auto-detects for production."
-    - name: TUNNEL_PORT
-      type: string
-      default: "9080"
-      description: "Local port for SSH tunnel (production mode, avoids conflict with local 8080)"
+      description: "Service base URL for local mode (e.g. http://goods-price-service:8080). Ignored in production mode."
   volumes:
     - name: vps-ssh
       secret:
@@ -39,17 +39,20 @@ spec:
         set -e
 
         COLLECTION="postman/Goods Price Comparison Service.postman_collection.json"
+        PIPELINE_MODE="$(params.PIPELINE_MODE)"
         SERVICE_URL="$(params.SERVICE_URL)"
-        TUNNEL_PORT="$(params.TUNNEL_PORT)"
-        TUNNEL_PID=""
+        RESULTS_JSON="/tmp/smoke-results.json"
+        NEWMAN_EXIT=0
 
         echo "=== Smoke Tests ==="
         echo "  Collection: ${COLLECTION}"
+        echo "  Mode:       ${PIPELINE_MODE}"
 
-        # ── Detect mode and set up connectivity ──
-        if [ -f /var/run/secrets/vps/id_rsa ] && [ -z "${SERVICE_URL}" ]; then
+        # ── Detect mode ──
+        if [ "${PIPELINE_MODE}" = "production" ]; then
+          # ── Production Mode: SSH into VPS, run Newman directly ──
           echo ""
-          echo "━━━ Production Mode: SSH Tunnel ━━━"
+          echo "━━━ Production Mode: VPS SSH ━━━"
           SSH_USER=$(cat /var/run/secrets/vps/user 2>/dev/null || echo "deploy")
           SSH_HOST=$(cat /var/run/secrets/vps/host 2>/dev/null || echo "")
           SSH_PORT=$(cat /var/run/secrets/vps/port 2>/dev/null || echo "22")
@@ -59,160 +62,129 @@ spec:
             exit 1
           fi
 
-          # Install SSH client
           echo "→ Installing SSH client..."
           apk add --no-cache openssh-client curl >/dev/null 2>&1
 
-          # Write SSH key
           mkdir -p /root/.ssh
           cp /var/run/secrets/vps/id_rsa /root/.ssh/id_rsa
           chmod 600 /root/.ssh/id_rsa
 
-          SSH_OPTS="-o StrictHostKeyChecking=accept-new -o UserKnownHostsFile=/dev/null -o ServerAliveInterval=30 -o ExitOnForwardFailure=yes"
+          SSH_OPTS="-o StrictHostKeyChecking=accept-new -o UserKnownHostsFile=/dev/null -o ServerAliveInterval=30"
 
-          # Start background SSH tunnel
-          echo "→ Creating SSH tunnel: localhost:${TUNNEL_PORT} → ${SSH_HOST}:8080"
-          ssh ${SSH_OPTS} -i /root/.ssh/id_rsa \
-            -NTL "${TUNNEL_PORT}:localhost:8080" \
-            -p "${SSH_PORT}" \
-            "${SSH_USER}@${SSH_HOST}" &
-          TUNNEL_PID=$!
-          sleep 3
+          APP_DIR="/home/production/app/goods-price-comparison-service"
 
-          if ! kill -0 "${TUNNEL_PID}" 2>/dev/null; then
-            echo "  ❌ SSH tunnel failed to start"
+          # Upload collection to VPS (base64 trick, echo is allowed by deploy-wrapper)
+          echo "→ Uploading Postman collection to VPS..."
+          COLLECTION_B64=$(base64 < "${COLLECTION}")
+          ssh ${SSH_OPTS} -i /root/.ssh/id_rsa -p "${SSH_PORT}" \
+            "${SSH_USER}@${SSH_HOST}" \
+            "echo '${COLLECTION_B64}' | base64 -d > ${APP_DIR}/smoke-collection.json" || {
+            echo "  ❌ Failed to upload collection"
             exit 1
-          fi
-          echo "  ✅ Tunnel established (PID ${TUNNEL_PID})"
+          }
+          echo "  ✅ Collection uploaded to ${APP_DIR}/smoke-collection.json"
 
-          SERVICE_URL="http://localhost:${TUNNEL_PORT}"
+          # Check Node.js is available
+          echo "→ Checking Node.js on VPS..."
+          NODE_OK=$(ssh ${SSH_OPTS} -i /root/.ssh/id_rsa -p "${SSH_PORT}" \
+            "${SSH_USER}@${SSH_HOST}" "which node 2>/dev/null && node --version || echo 'MISSING'" 2>/dev/null)
+          echo "  Node: ${NODE_OK}"
+
+          # Run Newman on VPS via npx
+          echo ""
+          echo "━━━ Running Smoke Tests on VPS ━━━"
+          echo "  Target: http://localhost:8080"
+          echo ""
+
+          set +e
+          ssh ${SSH_OPTS} -i /root/.ssh/id_rsa -p "${SSH_PORT}" \
+            "${SSH_USER}@${SSH_HOST}" \
+            "cd ${APP_DIR} && npx -y newman@latest run smoke-collection.json \
+              --env-var baseUrl=http://localhost:8080 \
+              --reporters cli \
+              --reporter-cli-no-banner \
+              --timeout-request 15000 \
+              --delay-request 200" 2>&1
+          NEWMAN_EXIT=$?
+          set -e
+
+          echo ""
+
         elif [ -n "${SERVICE_URL}" ]; then
+          # ── Local Mode: Newman runs in the pod ──
           echo ""
           echo "━━━ Local Mode: Direct ━━━"
           echo "  Target: ${SERVICE_URL}"
+
+          # Install Newman
+          echo ""
+          echo "→ Installing Newman..."
+          npm install -g newman --silent 2>&1 | tail -1
+
+          # Verify collection exists
+          if [ ! -f "${COLLECTION}" ]; then
+            echo "  ❌ Postman collection not found at ${COLLECTION}"
+            exit 1
+          fi
+
+          # Run Newman
+          echo ""
+          echo "━━━ Running Smoke Tests ━━━"
+          echo "  URL:  ${SERVICE_URL}"
+          echo ""
+          set +e
+          newman run "${COLLECTION}" \
+            --env-var "baseUrl=${SERVICE_URL}" \
+            --reporters cli,json \
+            --reporter-cli-no-banner \
+            --reporter-json-export "${RESULTS_JSON}" \
+            --timeout-request 15000 \
+            --delay-request 200
+          NEWMAN_EXIT=$?
+          set -e
+
         else
           echo ""
           echo "  ⚠️  No SERVICE_URL set and no VPS SSH key found — skipping smoke tests"
           exit 0
         fi
 
-        # ── Install Newman ──
-        echo ""
-        echo "→ Installing Newman..."
-        npm install -g newman --silent 2>&1 | tail -1
-
-        # ── Verify collection exists ──
-        if [ ! -f "${COLLECTION}" ]; then
-          echo "  ❌ Postman collection not found at ${COLLECTION}"
-          echo "  Expected at: $(pwd)/${COLLECTION}"
-          echo "  Available files in postman/:"
-          ls -la postman/ 2>/dev/null || echo "    (postman/ directory not found)"
-          exit 1
-        fi
-
-        # ── Run smoke tests ──
-        echo ""
-        echo "━━━ Running Smoke Tests ━━━"
-        echo "  URL:  ${SERVICE_URL}"
-        echo ""
-        RESULTS_JSON="/tmp/smoke-results.json"
-        set +e
-        newman run "${COLLECTION}" \
-          --env-var "baseUrl=${SERVICE_URL}" \
-          --reporters cli,json \
-          --reporter-cli-no-banner \
-          --reporter-json-export "${RESULTS_JSON}" \
-          --timeout-request 15000 \
-          --delay-request 200
-        NEWMAN_EXIT=$?
-        set -e
-
-        # ── Generate summary (JSON + Markdown) ──
-        echo ""
-        echo "━━━ Smoke Test Results ━━━"
-        echo ""
-
+        # ── Display summary (local mode has JSON results) ──
         if [ -f "${RESULTS_JSON}" ]; then
-          # Write parser script to temp file (avoids YAML quoting issues)
-          cat > /tmp/parse-results.js << 'XEOF'
-const fs = require('fs');
-const data = JSON.parse(fs.readFileSync('/tmp/smoke-results.json', 'utf8'));
-const run = data.run || {};
-const stats = run.stats || {};
-const failures = run.failures || [];
-const executions = run.executions || [];
-
-const tests = stats.tests || { total: 0, failed: 0, pending: 0 };
-const assertions = stats.assertions || { total: 0, failed: 0, pending: 0 };
-
-console.log('| Metric | Total | Passed | Failed |');
-console.log('|--------|-------|--------|--------|');
-console.log('| Requests | ' + (stats.requests?.total || 0) + ' | ' + ((stats.requests?.total || 0) - failures.length) + ' | ' + failures.length + ' |');
-console.log('| Assertions | ' + assertions.total + ' | ' + (assertions.total - assertions.failed) + ' | ' + assertions.failed + ' |');
-console.log('| Tests | ' + tests.total + ' | ' + (tests.total - tests.failed) + ' | ' + tests.failed + ' |');
-console.log('');
-
-if (failures.length > 0) {
-  console.log('### Failed Requests');
-  console.log('');
-  console.log('| # | Request | Error | Test |');
-  console.log('|---|---------|-------|------|');
-  failures.forEach(function(f, i) {
-    var name = f.source?.name || 'unknown';
-    var err = f.error?.name || 'unknown';
-    var test = f.error?.test || '-';
-    console.log('| ' + (i + 1) + ' | ' + name + ' | ' + err + ' | ' + test + ' |');
-  });
-  console.log('');
-}
-
-// Group by folder for per-folder summary
-var folders = {};
-executions.forEach(function(ex) {
-  var item = ex.item;
-  if (!item) return;
-  // Walk up to find folder name
-  var ancestors = [];
-  var cursor = ex;
-  while (cursor && cursor.parent && cursor.parent.name) {
-    ancestors.unshift(cursor.parent.name);
-    cursor = cursor.parent;
-  }
-  var failed = (ex.assertions || []).some(function(a) { return a.error; });
-  var key = ancestors.length > 0 ? ancestors[ancestors.length - 1] : 'root';
-  if (!folders[key]) folders[key] = { total: 0, failed: 0 };
-  folders[key].total++;
-  if (failed) folders[key].failed++;
-});
-
-console.log('### Per-Folder Results');
-console.log('');
-console.log('| Folder | Total | Failed | Passed |');
-console.log('|--------|-------|--------|--------|');
-Object.keys(folders).sort().forEach(function(f) {
-  var icon = folders[f].failed > 0 ? '[FAIL]' : '[PASS]';
-  console.log('| ' + icon + ' ' + f + ' | ' + folders[f].total + ' | ' + folders[f].failed + ' | ' + (folders[f].total - folders[f].failed) + ' |';
-});
-
-// Raw JSON summary line
-var summary = {
-  totalRequests: stats.requests?.total || 0,
-  totalAssertions: assertions.total,
-  failedAssertions: assertions.failed,
-  failedRequests: failures.length,
-  passed: failures.length === 0
-};
-console.log('---');
-console.log('JSON: ' + JSON.stringify(summary));
-XEOF
-          node /tmp/parse-results.js || echo "  Could not parse smoke test results JSON"
+          echo ""
+          echo "━━━ Smoke Test Results ━━━"
+          echo ""
+          apk add --no-cache jq >/dev/null 2>&1
+          echo "| Metric | Total | Passed | Failed |"
+          echo "|--------|-------|--------|--------|"
+          jq -r '
+            .run as $run |
+            .run.failures as $f |
+            "| Requests | \($run.stats.requests.total) | \($run.stats.requests.total - ($f | length)) | \($f | length) |",
+            "| Assertions | \($run.stats.assertions.total) | \($run.stats.assertions.total - $run.stats.assertions.failed) | \($run.stats.assertions.failed) |",
+            "| Tests | \($run.stats.tests.total) | \($run.stats.tests.total - $run.stats.tests.failed) | \($run.stats.tests.failed) |"
+          ' "${RESULTS_JSON}" 2>/dev/null || true
+          FAIL_COUNT=$(jq -r '.run.failures | length' "${RESULTS_JSON}" 2>/dev/null || echo "0")
+          echo ""
+          if [ "${FAIL_COUNT}" -gt 0 ]; then
+            echo "### Failed Requests"
+            echo ""
+            echo "| # | Request | Error | Test |"
+            echo "|---|---------|-------|------|"
+            jq -r '.run.failures[] | "| \(.source.name // "unknown") | \(.error.name // "unknown") | \(.error.test // "-") |"' "${RESULTS_JSON}" 2>/dev/null || true
+            echo ""
+          fi
+          echo "---"
+          echo "Failed: ${FAIL_COUNT}"
         fi
 
-        # ── Clean up tunnel ──
-        if [ -n "${TUNNEL_PID}" ]; then
+        # ── Clean up uploaded collection on VPS ──
+        if [ -n "${SSH_HOST:-}" ]; then
           echo ""
-          echo "→ Cleaning up SSH tunnel..."
-          kill "${TUNNEL_PID}" 2>/dev/null || true
+          echo "→ Cleaning up..."
+          ssh ${SSH_OPTS} -i /root/.ssh/id_rsa -p "${SSH_PORT}" \
+            "${SSH_USER}@${SSH_HOST}" \
+            "rm -f ${APP_DIR}/smoke-collection.json" 2>/dev/null || true
         fi
 
         echo ""

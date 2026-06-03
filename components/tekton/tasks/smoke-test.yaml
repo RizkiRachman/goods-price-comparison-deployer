@@ -115,15 +115,98 @@ spec:
         echo "━━━ Running Smoke Tests ━━━"
         echo "  URL:  ${SERVICE_URL}"
         echo ""
+        RESULTS_JSON="/tmp/smoke-results.json"
         set +e
         newman run "${COLLECTION}" \
           --env-var "baseUrl=${SERVICE_URL}" \
-          --reporters cli \
+          --reporters cli,json \
           --reporter-cli-no-banner \
+          --reporter-json-export "${RESULTS_JSON}" \
           --timeout-request 15000 \
           --delay-request 200
         NEWMAN_EXIT=$?
         set -e
+
+        # ── Generate summary (JSON + Markdown) ──
+        echo ""
+        echo "━━━ Smoke Test Results ━━━"
+        echo ""
+
+        if [ -f "${RESULTS_JSON}" ]; then
+          # Write parser script to temp file (avoids YAML quoting issues)
+          cat > /tmp/parse-results.js << 'XEOF'
+const fs = require('fs');
+const data = JSON.parse(fs.readFileSync('/tmp/smoke-results.json', 'utf8'));
+const run = data.run || {};
+const stats = run.stats || {};
+const failures = run.failures || [];
+const executions = run.executions || [];
+
+const tests = stats.tests || { total: 0, failed: 0, pending: 0 };
+const assertions = stats.assertions || { total: 0, failed: 0, pending: 0 };
+
+console.log('| Metric | Total | Passed | Failed |');
+console.log('|--------|-------|--------|--------|');
+console.log('| Requests | ' + (stats.requests?.total || 0) + ' | ' + ((stats.requests?.total || 0) - failures.length) + ' | ' + failures.length + ' |');
+console.log('| Assertions | ' + assertions.total + ' | ' + (assertions.total - assertions.failed) + ' | ' + assertions.failed + ' |');
+console.log('| Tests | ' + tests.total + ' | ' + (tests.total - tests.failed) + ' | ' + tests.failed + ' |');
+console.log('');
+
+if (failures.length > 0) {
+  console.log('### Failed Requests');
+  console.log('');
+  console.log('| # | Request | Error | Test |');
+  console.log('|---|---------|-------|------|');
+  failures.forEach(function(f, i) {
+    var name = f.source?.name || 'unknown';
+    var err = f.error?.name || 'unknown';
+    var test = f.error?.test || '-';
+    console.log('| ' + (i + 1) + ' | ' + name + ' | ' + err + ' | ' + test + ' |');
+  });
+  console.log('');
+}
+
+// Group by folder for per-folder summary
+var folders = {};
+executions.forEach(function(ex) {
+  var item = ex.item;
+  if (!item) return;
+  // Walk up to find folder name
+  var ancestors = [];
+  var cursor = ex;
+  while (cursor && cursor.parent && cursor.parent.name) {
+    ancestors.unshift(cursor.parent.name);
+    cursor = cursor.parent;
+  }
+  var failed = (ex.assertions || []).some(function(a) { return a.error; });
+  var key = ancestors.length > 0 ? ancestors[ancestors.length - 1] : 'root';
+  if (!folders[key]) folders[key] = { total: 0, failed: 0 };
+  folders[key].total++;
+  if (failed) folders[key].failed++;
+});
+
+console.log('### Per-Folder Results');
+console.log('');
+console.log('| Folder | Total | Failed | Passed |');
+console.log('|--------|-------|--------|--------|');
+Object.keys(folders).sort().forEach(function(f) {
+  var icon = folders[f].failed > 0 ? '[FAIL]' : '[PASS]';
+  console.log('| ' + icon + ' ' + f + ' | ' + folders[f].total + ' | ' + folders[f].failed + ' | ' + (folders[f].total - folders[f].failed) + ' |';
+});
+
+// Raw JSON summary line
+var summary = {
+  totalRequests: stats.requests?.total || 0,
+  totalAssertions: assertions.total,
+  failedAssertions: assertions.failed,
+  failedRequests: failures.length,
+  passed: failures.length === 0
+};
+console.log('---');
+console.log('JSON: ' + JSON.stringify(summary));
+XEOF
+          node /tmp/parse-results.js || echo "  Could not parse smoke test results JSON"
+        fi
 
         # ── Clean up tunnel ──
         if [ -n "${TUNNEL_PID}" ]; then

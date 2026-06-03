@@ -114,10 +114,6 @@ spec:
     - name: gravitee-version
       type: string
       default: "${GRAVITEE_VERSION}"
-    - name: smoke-tunnel-port
-      type: string
-      default: "${SMOKE_TUNNEL_PORT}"
-
   tasks:
     - name: cleanup
       taskRef:
@@ -340,8 +336,6 @@ spec:
       params:
         - name: SERVICE_URL
           value: "http://$(params.deployment-name).$(params.deployment-namespace):$(params.deployment-port)"
-        - name: TUNNEL_PORT
-          value: $(params.smoke-tunnel-port)
 
     - name: gravitee-register
       when:

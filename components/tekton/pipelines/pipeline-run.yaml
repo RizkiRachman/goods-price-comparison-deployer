@@ -81,3 +81,5 @@ spec:
       value: "${INFRA_GRAVITEE_MOUNT}"
     - name: gravitee-version
       value: "${GRAVITEE_VERSION}"
+    - name: smoke-tunnel-port
+      value: "${SMOKE_TUNNEL_PORT}"

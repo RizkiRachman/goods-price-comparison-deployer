@@ -176,6 +176,8 @@ set_defaults() {
     DAST_OPENAPI_PATH="${DAST_OPENAPI_PATH:-/v3/api-docs}"
     DAST_FAIL_ON_RISK="${DAST_FAIL_ON_RISK:-2}"
 
+    SMOKE_TUNNEL_PORT="${SMOKE_TUNNEL_PORT:-9080}"
+
     if [ -z "${GRAVITEE_CONTAINER_IP:-}" ]; then
         GRAVITEE_CONTAINER_IP=$(docker inspect gravitee-mgmt-api 2>/dev/null | \
             python3 -c "import json,sys; d=json.load(sys.stdin)[0]; nets=d['NetworkSettings']['Networks']; print(next((v['IPAddress'] for n,v in nets.items() if 'dev-infra' in n and v.get('IPAddress')), ''))" 2>/dev/null || true)

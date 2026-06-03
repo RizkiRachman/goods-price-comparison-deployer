@@ -22,10 +22,14 @@ source "$SCRIPT_DIR/../scripts/lib/common.sh"
 # ── Configuration ──────────────────────────────────────────
 
 VPS_USER="${VPS_USER:-ubuntu}"
-VPS_SSH_KEY="${VPS_SSH_KEY:-$HOME/.ssh/vps-vps}"
+VPS_SSH_KEY="${VPS_SSH_KEY:-$HOME/.ssh/vps-deploy}"
 
 if [ -n "${VPS_HOST:-}" ]; then
     SSH_DEST="${VPS_USER}@${VPS_HOST}"
+elif grep -qs "^Host vps$" ~/.ssh/config 2>/dev/null; then
+    SSH_DEST="vps"
+elif grep -qs "^Host vps-deploy$" ~/.ssh/config 2>/dev/null; then
+    SSH_DEST="vps-deploy"
 else
     SSH_DEST="vps"
 fi
@@ -54,7 +58,8 @@ start_tunnel() {
         -o "ServerAliveInterval=30" \
         -o "ServerAliveCountMax=3" \
         -o "ExitOnForwardFailure=yes" \
-        -o "StrictHostKeyChecking=no" \
+        -o "StrictHostKeyChecking=accept-new" \
+        -o "UserKnownHostsFile=/dev/null" \
         ${VPS_SSH_KEY:+-i "$VPS_SSH_KEY"} \
         -NTL "${LOCAL_PORT}:${REMOTE_HOST}:${REMOTE_PORT}" \
         "${SSH_DEST}" &
@@ -154,9 +159,9 @@ Options:
   -h         This help
 
 Environment variables:
-  VPS_HOST        VPS IP/hostname (default: uses SSH alias "vps")
+  VPS_HOST        VPS IP/hostname (default: uses SSH alias "vps" or "vps-deploy")
   VPS_USER        SSH user (default: ubuntu)
-  VPS_SSH_KEY     SSH key path (default: ~/.ssh/vps-vps)
+  VPS_SSH_KEY     SSH key path (default: ~/.ssh/vps-deploy)
   LOCAL_PORT      Local port override (default: 8080)
   REMOTE_HOST     Remote host on VPS (default: localhost)
   REMOTE_PORT     Remote port on VPS (default: 8080)

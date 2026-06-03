@@ -334,6 +334,8 @@ spec:
         - name: source
           workspace: shared-workspace
       params:
+        - name: PIPELINE_MODE
+          value: $(params.pipeline-mode)
         - name: SERVICE_URL
           value: "http://$(params.deployment-name).$(params.deployment-namespace):$(params.deployment-port)"
 

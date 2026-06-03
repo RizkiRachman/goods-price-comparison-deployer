@@ -13,10 +13,13 @@ spec:
   workspaces:
     - name: source
   params:
+    - name: PIPELINE_MODE
+      type: string
+      description: "Pipeline mode: 'local' or 'production'"
     - name: SERVICE_URL
       type: string
       default: ""
-      description: "Service base URL for local mode (e.g. http://goods-price-service:8080). Auto-detected for production."
+      description: "Service base URL for local mode (e.g. http://goods-price-service:8080). Ignored in production mode."
   volumes:
     - name: vps-ssh
       secret:
@@ -36,15 +39,17 @@ spec:
         set -e
 
         COLLECTION="postman/Goods Price Comparison Service.postman_collection.json"
+        PIPELINE_MODE="$(params.PIPELINE_MODE)"
         SERVICE_URL="$(params.SERVICE_URL)"
         RESULTS_JSON="/tmp/smoke-results.json"
         NEWMAN_EXIT=0
 
         echo "=== Smoke Tests ==="
         echo "  Collection: ${COLLECTION}"
+        echo "  Mode:       ${PIPELINE_MODE}"
 
         # ── Detect mode ──
-        if [ -f /var/run/secrets/vps/id_rsa ] && [ -z "${SERVICE_URL}" ]; then
+        if [ "${PIPELINE_MODE}" = "production" ]; then
           # ── Production Mode: SSH into VPS, run Newman directly ──
           echo ""
           echo "━━━ Production Mode: VPS SSH ━━━"

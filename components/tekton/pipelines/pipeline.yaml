@@ -114,6 +114,9 @@ spec:
     - name: gravitee-version
       type: string
       default: "${GRAVITEE_VERSION}"
+    - name: smoke-tunnel-port
+      type: string
+      default: "${SMOKE_TUNNEL_PORT}"
 
   tasks:
     - name: cleanup
@@ -323,6 +326,23 @@ spec:
         - name: MAVEN_SETTINGS_PATH
           value: $(params.maven-settings-path)
 
+    - name: smoke-test
+      when:
+        - input: $(params.pipeline-mode)
+          operator: in
+          values: ["local", "production"]
+      taskRef:
+        name: smoke-test
+      runAfter: [deploy, vps-deploy]
+      workspaces:
+        - name: source
+          workspace: shared-workspace
+      params:
+        - name: SERVICE_URL
+          value: "http://$(params.deployment-name).$(params.deployment-namespace):$(params.deployment-port)"
+        - name: TUNNEL_PORT
+          value: $(params.smoke-tunnel-port)
+
     - name: gravitee-register
       when:
         - input: $(params.pipeline-mode)
@@ -330,7 +350,7 @@ spec:
           values: ["local"]
       taskRef:
         name: gravitee-register
-      runAfter: [deploy, vps-deploy]
+      runAfter: [smoke-test]
       workspaces:
         - name: source
           workspace: shared-workspace

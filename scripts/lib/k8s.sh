@@ -26,7 +26,8 @@ PIPELINE_VARS='${PIPELINE_MODE} ${PIPELINE_NAMESPACE}
   ${PROPERTIES_REPO_URL} ${PROPERTIES_REPO_DEFAULT_BRANCH} ${ENVIRONMENT_NAME}
   ${GRAVITEE_HOST} ${GRAVITEE_PORT} ${GRAVITEE_ORGANIZATION} ${GRAVITEE_ENVIRONMENT}
   ${GRAVITEE_CONTEXT_PATH} ${GRAVITEE_BACKEND_URL} ${INFRA_GRAVITEE_MOUNT} ${GRAVITEE_VERSION}
-  ${REGISTRY_CLUSTER_HOST} ${REGISTRY_CLUSTER_PORT}'
+  ${REGISTRY_CLUSTER_HOST} ${REGISTRY_CLUSTER_PORT}
+  ${SMOKE_TUNNEL_PORT}'
 
 PIPELINE_RUN_VARS='${PIPELINE_MODE} ${PIPELINE_NAMESPACE} ${PIPELINE_SERVICE_ACCOUNT}
   ${GIT_REPO_URL} ${GIT_REPO_DEFAULT_BRANCH}
@@ -40,7 +41,8 @@ PIPELINE_RUN_VARS='${PIPELINE_MODE} ${PIPELINE_NAMESPACE} ${PIPELINE_SERVICE_ACC
   ${PROPERTIES_REPO_URL} ${PROPERTIES_REPO_DEFAULT_BRANCH} ${ENVIRONMENT_NAME}
   ${GRAVITEE_HOST} ${GRAVITEE_PORT} ${GRAVITEE_ORGANIZATION} ${GRAVITEE_ENVIRONMENT}
   ${GRAVITEE_CONTEXT_PATH} ${GRAVITEE_BACKEND_URL} ${INFRA_GRAVITEE_MOUNT} ${GRAVITEE_VERSION}
-  ${REGISTRY_CLUSTER_HOST} ${REGISTRY_CLUSTER_PORT}'
+  ${REGISTRY_CLUSTER_HOST} ${REGISTRY_CLUSTER_PORT}
+  ${SMOKE_TUNNEL_PORT}'
 
 SECURITY_RUN_VARS='${PIPELINE_NAMESPACE} ${PIPELINE_SERVICE_ACCOUNT}
   ${GIT_REPO_URL} ${GIT_REPO_DEFAULT_BRANCH}
@@ -168,17 +170,13 @@ apply_k8s_resources() {
         -f https://raw.githubusercontent.com/tektoncd/catalog/main/task/git-clone/0.9/git-clone.yaml \
         2>/dev/null || warn "Failed to install git-clone task (may already exist)"
 
-    # Tasks — walk all domain subdirectories in order
+    # Tasks — flat directory, apply in sorted order
     log "Applying Tekton tasks..."
-    for _domain in build image database deploy; do
-        _domain_dir="$TASKS_DIR/$_domain"
-        [ -d "$_domain_dir" ] || continue
-        for _task in "$_domain_dir"/*.yaml; do
-            [ -f "$_task" ] || continue
-            envsubst "$TASK_VARS" < "$_task" | kubectl apply -f - \
-                && log "  Applied: ${_domain}/$(basename "$_task")" \
-                || warn "  Failed: ${_domain}/$(basename "$_task")"
-        done
+    for _task in "$TASKS_DIR"/*.yaml; do
+        [ -f "$_task" ] || continue
+        envsubst "$TASK_VARS" < "$_task" | kubectl apply -f - \
+            && log "  Applied: $(basename "$_task")" \
+            || warn "  Failed: $(basename "$_task")"
     done
 
     # Pipelines

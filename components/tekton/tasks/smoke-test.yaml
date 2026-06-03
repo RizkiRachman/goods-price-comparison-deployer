@@ -1,0 +1,141 @@
+# Task: Smoke Test (Newman)
+# Runs Postman collection smoke tests against the deployed service.
+# Local mode: uses K8s service DNS directly.
+# Production mode: creates SSH tunnel to VPS, runs tests through the tunnel.
+# Runs after deploy (local) or vps-deploy (production), before gravitee-register.
+apiVersion: tekton.dev/v1
+kind: Task
+metadata:
+  name: smoke-test
+  namespace: ${PIPELINE_NAMESPACE}
+spec:
+  workspaces:
+    - name: source
+  params:
+    - name: SERVICE_URL
+      type: string
+      default: ""
+      description: "Service base URL for local mode (e.g. http://goods-price-service:8080). Auto-detects for production."
+    - name: TUNNEL_PORT
+      type: string
+      default: "9080"
+      description: "Local port for SSH tunnel (production mode, avoids conflict with local 8080)"
+  volumes:
+    - name: vps-ssh
+      secret:
+        secretName: vps-ssh-key
+        defaultMode: 0600
+        optional: true
+  steps:
+    - name: run-smoke-tests
+      image: node:20-alpine
+      workingDir: $(workspaces.source.path)
+      volumeMounts:
+        - name: vps-ssh
+          mountPath: /var/run/secrets/vps
+          readOnly: true
+      script: |
+        #!/bin/sh
+        set -e
+
+        COLLECTION="postman/Goods Price Comparison Service.postman_collection.json"
+        SERVICE_URL="$(params.SERVICE_URL)"
+        TUNNEL_PORT="$(params.TUNNEL_PORT)"
+        TUNNEL_PID=""
+
+        echo "=== Smoke Tests ==="
+        echo "  Collection: ${COLLECTION}"
+
+        # ── Detect mode and set up connectivity ──
+        if [ -f /var/run/secrets/vps/id_rsa ] && [ -z "${SERVICE_URL}" ]; then
+          echo ""
+          echo "━━━ Production Mode: SSH Tunnel ━━━"
+          SSH_USER=$(cat /var/run/secrets/vps/user 2>/dev/null || echo "deploy")
+          SSH_HOST=$(cat /var/run/secrets/vps/host 2>/dev/null || echo "")
+          SSH_PORT=$(cat /var/run/secrets/vps/port 2>/dev/null || echo "22")
+
+          if [ -z "$SSH_HOST" ]; then
+            echo "  ❌ SSH_HOST not found in VPS secret"
+            exit 1
+          fi
+
+          # Install SSH client
+          echo "→ Installing SSH client..."
+          apk add --no-cache openssh-client curl >/dev/null 2>&1
+
+          # Write SSH key
+          mkdir -p /root/.ssh
+          cp /var/run/secrets/vps/id_rsa /root/.ssh/id_rsa
+          chmod 600 /root/.ssh/id_rsa
+
+          SSH_OPTS="-o StrictHostKeyChecking=accept-new -o UserKnownHostsFile=/dev/null -o ServerAliveInterval=30 -o ExitOnForwardFailure=yes"
+
+          # Start background SSH tunnel
+          echo "→ Creating SSH tunnel: localhost:${TUNNEL_PORT} → ${SSH_HOST}:8080"
+          ssh ${SSH_OPTS} -i /root/.ssh/id_rsa \
+            -NTL "${TUNNEL_PORT}:localhost:8080" \
+            -p "${SSH_PORT}" \
+            "${SSH_USER}@${SSH_HOST}" &
+          TUNNEL_PID=$!
+          sleep 3
+
+          if ! kill -0 "${TUNNEL_PID}" 2>/dev/null; then
+            echo "  ❌ SSH tunnel failed to start"
+            exit 1
+          fi
+          echo "  ✅ Tunnel established (PID ${TUNNEL_PID})"
+
+          SERVICE_URL="http://localhost:${TUNNEL_PORT}"
+        elif [ -n "${SERVICE_URL}" ]; then
+          echo ""
+          echo "━━━ Local Mode: Direct ━━━"
+          echo "  Target: ${SERVICE_URL}"
+        else
+          echo ""
+          echo "  ⚠️  No SERVICE_URL set and no VPS SSH key found — skipping smoke tests"
+          exit 0
+        fi
+
+        # ── Install Newman ──
+        echo ""
+        echo "→ Installing Newman..."
+        npm install -g newman --silent 2>&1 | tail -1
+
+        # ── Verify collection exists ──
+        if [ ! -f "${COLLECTION}" ]; then
+          echo "  ❌ Postman collection not found at ${COLLECTION}"
+          echo "  Expected at: $(pwd)/${COLLECTION}"
+          echo "  Available files in postman/:"
+          ls -la postman/ 2>/dev/null || echo "    (postman/ directory not found)"
+          exit 1
+        fi
+
+        # ── Run smoke tests ──
+        echo ""
+        echo "━━━ Running Smoke Tests ━━━"
+        echo "  URL:  ${SERVICE_URL}"
+        echo ""
+        set +e
+        newman run "${COLLECTION}" \
+          --env-var "baseUrl=${SERVICE_URL}" \
+          --reporters cli \
+          --reporter-cli-no-banner \
+          --timeout-request 15000 \
+          --delay-request 200
+        NEWMAN_EXIT=$?
+        set -e
+
+        # ── Clean up tunnel ──
+        if [ -n "${TUNNEL_PID}" ]; then
+          echo ""
+          echo "→ Cleaning up SSH tunnel..."
+          kill "${TUNNEL_PID}" 2>/dev/null || true
+        fi
+
+        echo ""
+        if [ "${NEWMAN_EXIT}" -eq 0 ]; then
+          echo "✅ All smoke tests passed!"
+        else
+          echo "❌ Smoke tests failed (exit code ${NEWMAN_EXIT})"
+          exit 1
+        fi
